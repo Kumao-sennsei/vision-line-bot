@@ -1,10 +1,11 @@
 const express = require('express');
 const line = require('@line/bot-sdk');
 const axios = require('axios');
+const FormData = require('form-data');
+require('dotenv').config();
+
 const app = express();
 const port = process.env.PORT || 3000;
-
-require('dotenv').config();
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -12,6 +13,7 @@ const config = {
 };
 
 const client = new line.Client(config);
+
 app.post('/webhook', line.middleware(config), async (req, res) => {
   Promise.all(req.body.events.map(handleEvent)).then(result => res.json(result));
 });
@@ -29,14 +31,25 @@ async function handleEvent(event) {
     const imageBuffer = Buffer.concat(chunks);
     const base64Image = imageBuffer.toString('base64');
 
-    const response = await axios.post("https://api.openai.com/v1/chat/completions", {
+    const formData = new FormData();
+    formData.append('image', base64Image);
+    const imgurRes = await axios.post('https://api.imgur.com/3/image', formData, {
+      headers: {
+        Authorization: `Client-ID ${process.env.IMGUR_CLIENT_ID}`,
+        ...formData.getHeaders()
+      }
+    });
+
+    const imageUrl = imgurRes.data.data.link;
+
+    const gptRes = await axios.post("https://api.openai.com/v1/chat/completions", {
       model: "gpt-4-vision-preview",
       messages: [
         {
           role: "user",
           content: [
             { type: "text", text: "この画像について教えてください。" },
-            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+            { type: "image_url", image_url: { url: imageUrl } }
           ]
         }
       ],
@@ -48,7 +61,7 @@ async function handleEvent(event) {
       }
     });
 
-    const aiMessage = response.data.choices[0].message.content;
+    const aiMessage = gptRes.data.choices[0].message.content;
 
     return client.replyMessage(event.replyToken, {
       type: 'text',
