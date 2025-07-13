@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: vision-line-bot
+    env: node
+    plan: free
+    buildCommand: "npm install"
+    startCommand: "npm start"
+    envVars:
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
