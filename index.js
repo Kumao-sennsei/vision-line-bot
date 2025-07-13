@@ -42,7 +42,7 @@ async function handleEvent(event) {
       }
     });
 
-    const imageUrl = uploadRes.data.data.downloadPage;
+    const imageUrl = uploadRes.data.data.directLink;
 
     const gptRes = await axios.post("https://api.openai.com/v1/chat/completions", {
       model: "gpt-4-vision-preview",
