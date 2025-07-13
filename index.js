@@ -29,18 +29,20 @@ async function handleEvent(event) {
     const chunks = [];
     for await (const chunk of stream) chunks.push(chunk);
     const imageBuffer = Buffer.concat(chunks);
-    const base64Image = imageBuffer.toString('base64');
 
     const formData = new FormData();
-    formData.append('image', base64Image);
-    const imgurRes = await axios.post('https://api.imgur.com/3/image', formData, {
+    formData.append("file", imageBuffer, {
+      filename: "image.jpg",
+      contentType: "image/jpeg"
+    });
+
+    const uploadRes = await axios.post("https://store1.gofile.io/uploadFile", formData, {
       headers: {
-        Authorization: `Client-ID ${process.env.IMGUR_CLIENT_ID}`,
         ...formData.getHeaders()
       }
     });
 
-    const imageUrl = imgurRes.data.data.link;
+    const imageUrl = uploadRes.data.data.downloadPage;
 
     const gptRes = await axios.post("https://api.openai.com/v1/chat/completions", {
       model: "gpt-4-vision-preview",
