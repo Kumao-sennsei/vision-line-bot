@@ -1,7 +1,7 @@
 {
   "name": "vision-line-bot",
   "version": "1.0.0",
-  "type": "module",  // ←絶対に必要！！
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
