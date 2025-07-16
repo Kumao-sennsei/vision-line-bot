@@ -35,6 +35,8 @@ app.post('/webhook', async (req, res) => {
 
 // ---------- サーバー起動 ----------
 const port = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('くまお先生は起動中です！'));
+
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
