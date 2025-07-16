@@ -1,72 +1,112 @@
-const axios = require("axios");
-const cloudinary = require("cloudinary").v2;
+import express from 'express';
+import { middleware, Client } from '@line/bot-sdk';
+import dotenv from 'dotenv';
+import axios from 'axios';
+import { v2 as cloudinary } from 'cloudinary';
 
-// 🔧 Cloudinary設定
+dotenv.config();
+
 cloudinary.config({
   cloud_name: process.env.CLOUD_NAME,
   api_key: process.env.CLOUD_API_KEY,
-  api_secret: process.env.CLOUD_API_SECRET
+  api_secret: process.env.CLOUD_API_SECRET,
 });
 
-// 🔁 Cloudinaryにアップロードする関数
-async function uploadToCloudinary(imageBuffer) {
-  return new Promise((resolve, reject) => {
-    cloudinary.uploader.upload_stream(
-      { resource_type: "image" },
-      (error, result) => {
-        if (error) {
-          console.error("❌ Cloudinary upload error:", error);
-          reject(error);
-        } else {
-          console.log("✅ Cloudinary upload success:", result.secure_url);
-          resolve(result.secure_url);
+const app = express();
+app.use(express.json());
+
+const config = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
+};
+
+const client = new Client(config);
+
+app.post('/webhook', middleware(config), async (req, res) => {
+  const events = req.body.events;
+  const results = [];
+
+  for (const event of events) {
+    if (event.type === 'message' && event.message.type === 'image') {
+      const messageId = event.message.id;
+
+      try {
+        const stream = await client.getMessageContent(messageId);
+        const buffers = [];
+
+        for await (const chunk of stream) {
+          buffers.push(chunk);
         }
-      }
-    ).end(imageBuffer);
-  });
-}
 
-// 🔁 Visionに投げて回答をもらう処理（LINE画像URL渡すとAI解答が返る）
-async function handleImageMessage(fileUrl) {
-  try {
-    // LINEから画像Buffer取得
-    const stream = await axios.get(fileUrl, { responseType: "arraybuffer" });
-    const imageBuffer = Buffer.from(stream.data, "binary");
-    console.log("🟡 imageBuffer size:", imageBuffer.length);
+        const imageBuffer = Buffer.concat(buffers);
+        const uploadRes = await cloudinary.uploader.upload_stream(
+          { resource_type: 'image' },
+          async (error, result) => {
+            if (error) {
+              await client.replyMessage(event.replyToken, {
+                type: 'text',
+                text: '画像のアップロードに失敗しました。',
+              });
+              return;
+            }
 
-    // Cloudinaryにアップロード
-    const imageUrl = await uploadToCloudinary(imageBuffer);
-    console.log("🟢 Vision APIに送るURL:", imageUrl);
+            const imageUrl = result.secure_url;
 
-    // Vision APIへ送信
-    const visionResponse = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: "gpt-4-vision-preview",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "この画像の内容をわかりやすく解説してください。" },
-              { type: "image_url", image_url: { url: imageUrl } }
-            ]
+            const visionRes = await axios.post(
+              'https://api.openai.com/v1/chat/completions',
+              {
+                model: 'gpt-4-vision-preview',
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        type: 'image_url',
+                        image_url: {
+                          url: imageUrl,
+                        },
+                      },
+                      {
+                        type: 'text',
+                        text: 'この画像について教えてください。',
+                      },
+                    ],
+                  },
+                ],
+                max_tokens: 1000,
+              },
+              {
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                },
+              }
+            );
+
+            const replyText = visionRes.data.choices[0].message.content;
+
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: replyText,
+            });
           }
-        ],
-        max_tokens: 1000
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json"
-        }
+        );
+
+        stream.pipe(uploadRes);
+      } catch (err) {
+        console.error(err);
+        await client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '画像処理でエラーが発生しました。',
+        });
       }
-    );
-
-    const reply = visionResponse.data.choices[0]?.message?.content || "画像の解説が取得できませんでした。";
-    return reply;
-
-  } catch (error) {
-    console.error("❌ Vision連携エラー:", error?.response?.data || error.message || error);
-    return "画像の処理中にエラーが発生しました💦";
+    }
   }
-}
+
+  res.status(200).end();
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
