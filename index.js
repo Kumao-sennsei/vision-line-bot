@@ -1,37 +1,40 @@
+// ---------- 必要なライブラリ ----------
 const express = require('express');
-const app = express();
-app.use(express.json()); // LINEのJSON受信用
+const axios = require('axios');
+const bodyParser = require('body-parser');
+const line = require('@line/bot-sdk');
+const app = express(); // ← これがなかっただけ！
 
+// ---------- LINE設定 ----------
+const config = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET
+};
+
+const client = new line.Client(config);
+app.use(bodyParser.json());
+
+// ---------- Webhookエンドポイント ----------
 app.post('/webhook', async (req, res) => {
   try {
     const events = req.body.events;
-    console.log('📨 イベント受信:', events);
-
     for (const event of events) {
-      console.log('👉 個別イベント:', event);
-
-      if (event.message && event.message.type === 'image') {
-        const messageId = event.message.id;
-        console.log('🖼 画像メッセージID:', messageId);
-
-        const imageBuffer = await getImageBuffer(messageId); // たかちゃんの既存コードと同じ関数名ならOK
-        console.log('📦 バッファ取得成功');
-
-        const visionResponse = await callOpenAIVisionAPI(imageBuffer); // これも定義済みのはず
-        console.log('🧠 Vision応答:', visionResponse);
-
-        const replyText = visionResponse || '画像を解析できませんでした。';
+      if (event.type === 'message' && event.message.type === 'text') {
         await client.replyMessage(event.replyToken, {
           type: 'text',
-          text: `くまお先生の回答：${replyText}`,
+          text: `くまお先生です！あなたの質問「${event.message.text}」を受け取りました🐻📚`
         });
-        console.log('✅ 応答送信完了');
       }
     }
-
     res.status(200).send('OK');
-  } catch (error) {
-    console.error('🔥 処理中にエラー:', error);
-    res.status(500).send('エラーが発生しました');
+  } catch (err) {
+    console.error('エラー:', err);
+    res.status(500).end();
   }
+});
+
+// ---------- サーバー起動 ----------
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
 });
