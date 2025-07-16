@@ -1,3 +1,7 @@
+const express = require('express');
+const app = express();
+app.use(express.json()); // LINEのJSON受信用
+
 app.post('/webhook', async (req, res) => {
   try {
     const events = req.body.events;
