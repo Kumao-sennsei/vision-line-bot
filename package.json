@@ -1,7 +1,8 @@
 {
-  "name": "vision-line-bot-gofile",
-  "version": "1.3.0",
+  "name": "vision-line-bot",
+  "version": "1.0.0",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
