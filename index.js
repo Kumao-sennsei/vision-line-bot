@@ -1,3 +1,13 @@
+const express = require('express');
+const app = express();
+
+// ここ追加 ↓↓↓
+app.use(express.raw({ type: '*/*' }));
+// ↑↑↑ これが超重要！
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 import express from 'express';
 import { middleware, Client } from '@line/bot-sdk';
 import bodyParser from 'body-parser';
