@@ -10,10 +10,10 @@ app.post('/webhook', async (req, res) => {
         const messageId = event.message.id;
         console.log('🖼 画像メッセージID:', messageId);
 
-        const imageBuffer = await getImageBuffer(messageId); // getImageBuffer関数は定義済み？
+        const imageBuffer = await getImageBuffer(messageId); // たかちゃんの既存コードと同じ関数名ならOK
         console.log('📦 バッファ取得成功');
 
-        const visionResponse = await callOpenAIVisionAPI(imageBuffer);
+        const visionResponse = await callOpenAIVisionAPI(imageBuffer); // これも定義済みのはず
         console.log('🧠 Vision応答:', visionResponse);
 
         const replyText = visionResponse || '画像を解析できませんでした。';
