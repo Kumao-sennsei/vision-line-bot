@@ -11,7 +11,10 @@ const cfg = {
 const app    = express();
 const client = new line.Client(cfg);
 
-// ── ChatGPT (テキスト) ─────────────────────────
+// ── ヘルスチェック ──
+app.get('/', (_, res) => res.sendStatus(200));
+
+// ── ChatGPT（テキスト）──────────────────────
 async function askGPT(prompt) {
   const { data } = await axios.post(
     'https://api.openai.com/v1/chat/completions',
@@ -24,58 +27,75 @@ async function askGPT(prompt) {
   return data.choices[0].message.content.trim();
 }
 
-// ── バイナリ → Buffer 変換 ─────────────────────
-const streamToBuffer = s =>
-  new Promise((res, rej) => {
+// ── Stream → Buffer ─────────────────────────
+const toBuffer = stream =>
+  new Promise((ok, ng) => {
     const chunks = [];
-    s.on('data',  c => chunks.push(c));
-    s.on('end',   () => res(Buffer.concat(chunks)));
-    s.on('error', rej);
+    stream.on('data',  c => chunks.push(c));
+    stream.on('end',   () => ok(Buffer.concat(chunks)));
+    stream.on('error', ng);
   });
 
-// ── Webhook ────────────────────────────────────
+// ── Webhook ─────────────────────────────────
 app.post('/webhook', line.middleware(cfg), async (req, res) => {
   await Promise.all(req.body.events.map(handleEvent));
   res.sendStatus(200);
 });
 
-async function handleEvent(event) {
-  if (event.type !== 'message') return;
+async function handleEvent(e) {
+  if (e.type !== 'message') return;
 
   // テキスト → ChatGPT
-  if (event.message.type === 'text') {
-    const reply = await askGPT(event.message.text);
-    return client.replyMessage(event.replyToken, { type: 'text', text: reply });
+  if (e.message.type === 'text') {
+    const reply = await askGPT(e.message.text);
+    return client.replyMessage(e.replyToken, { type: 'text', text: reply });
   }
 
   // 画像 → GPT‑4o Vision
-  if (event.message.type === 'image') {
-    const stream = await client.getMessageContent(event.message.id);
-    const buff   = await streamToBuffer(stream);
-    const b64    = buff.toString('base64');
+  if (e.message.type === 'image') {
+    // ① 先に即レス（タイムアウト防止）
+    await client.replyMessage(e.replyToken, {
+      type: 'text',
+      text: '画像受け取ったよ！解析中…',
+    });
 
-    const { data } = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4o-vision-preview',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'image_url', image_url: `data:image/jpeg;base64,${b64}` },
-              { type: 'text',      text: 'この画像を日本語で簡潔に説明して' }
-            ]
-          }
-        ]
-      },
-      { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } }
-    );
+    try {
+      // ② 画像取得
+      const stream = await client.getMessageContent(e.message.id);
+      const buf    = await toBuffer(stream);
+      const b64    = buf.toString('base64');
 
-    const caption = data.choices[0].message.content.trim();
-    return client.replyMessage(event.replyToken, { type: 'text', text: caption });
+      // ③ Vision API
+      const { data } = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4o-vision-preview',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'image_url', image_url: `data:image/jpeg;base64,${b64}` },
+                { type: 'text',      text: 'この画像を日本語で簡単に説明して' }
+              ]
+            }
+          ]
+        },
+        { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } }
+      );
+
+      const caption = data.choices[0].message.content.trim();
+      return client.pushMessage(e.source.userId, { type: 'text', text: caption });
+
+    } catch (err) {
+      console.error(err);
+      return client.pushMessage(
+        e.source.userId,
+        { type: 'text', text: '画像の解析に失敗しちゃった💦' }
+      );
+    }
   }
 }
 
-// ── listen ────────────────────────────────────
+// ── Listen ─────────────────────────────────
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Bot on ${port}`));
+app.listen(port, () => console.log('Bot on ' + port));
