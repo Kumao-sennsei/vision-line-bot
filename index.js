@@ -27,7 +27,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 async function handleEvent(event) {
   if (event.type !== 'message') return null;
 
-  // ✅ 画像メッセージ対応
+  // ✅ 画像メッセージ対応（Vision）
   if (event.message.type === 'image') {
     try {
       const stream = await client.getMessageContent(event.message.id);
@@ -39,7 +39,6 @@ async function handleEvent(event) {
       console.log('✅画像取得成功！サイズ:', buffer.length, 'bytes');
       console.log('✅Content-Type:', contentType);
 
-      // ✅ 会話対応くまお先生プロンプト
       const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
         {
@@ -73,16 +72,16 @@ async function handleEvent(event) {
         }
       );
 
-      // ✅ LaTeXっぽい表記をLINE向けに整形
+      // LaTeX風整形
       let replyText = response.data.choices[0].message.content || '画像の解析結果が見つかりませんでした。';
       replyText = replyText
-        .replace(/\\frac{(.*?)}{(.*?)}/g, '($1)/($2)') // \frac{a}{b} → (a)/(b)
-        .replace(/\\sqrt{(.*?)}/g, '√($1)')           // \sqrt{a} → √(a)
-        .replace(/\\pm/g, '±')                        // \pm → ±
-        .replace(/\\\[|\\\]|\\\(|\\\)/g, '')          // \[ \] \( \) → 空文字
-        .replace(/\^2/g, '²')                         // ^2 → ²
-        .replace(/\^3/g, '³')                         // ^3 → ³
-        .replace(/\^([0-9])/g, '^$1');                // その他の ^n
+        .replace(/\\frac{(.*?)}{(.*?)}/g, '($1)/($2)')
+        .replace(/\\sqrt{(.*?)}/g, '√($1)')
+        .replace(/\\pm/g, '±')
+        .replace(/\\\[|\\\]|\\\(|\\\)/g, '')
+        .replace(/\^2/g, '²')
+        .replace(/\^3/g, '³')
+        .replace(/\^([0-9])/g, '^$1');
 
       return client.replyMessage(event.replyToken, {
         type: 'text',
@@ -98,12 +97,48 @@ async function handleEvent(event) {
     }
   }
 
-  // ✅ テキストメッセージへの軽い返答（おまけ）
+  // ✅ テキストメッセージ対応（Chat会話）
   if (event.message.type === 'text') {
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: `くまお先生です。「${event.message.text}」を受け取りました📩\n質問があれば画像も送ってね📸`,
-    });
+    try {
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4o',
+          messages: [
+            {
+              role: 'system',
+              content:
+                'あなたは優しくてユーモラスな数学の先生「くまお先生」です。' +
+                '生徒と会話をするように、親しみやすく、やさしく、ちょっと面白く返答してください。',
+            },
+            {
+              role: 'user',
+              content: event.message.text,
+            },
+          ],
+          max_tokens: 1000,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const replyText = response.data.choices[0].message.content || 'くまお先生、ちょっと考え中かも…💭';
+
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `くまお先生の回答だよ🐻✨\n\n${replyText}`,
+      });
+    } catch (error) {
+      console.error('❌ Chatエラー:', error.response?.data || error.message);
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: 'テキストの返答中にエラーが出たよ💥\nくまお先生、お昼寝中かも…',
+      });
+    }
   }
 
   return null;
