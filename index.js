@@ -1,15 +1,19 @@
-require("dotenv").config();
-const express = require("express");
-const line = require("@line/bot-sdk");
-const axios = require("axios");
-const { v2: cloudinary } = require("cloudinary");
-const app = express();
+const express = require('express');
+const line = require('@line/bot-sdk');
+const axios = require('axios');
+const dotenv = require('dotenv');
+const { v2: cloudinary } = require('cloudinary');
+const fs = require('fs');
+const path = require('path');
 
-// LINE設定
+dotenv.config();
+
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
+
+const app = express();
 const client = new line.Client(config);
 
 // Cloudinary設定
@@ -19,110 +23,88 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// webhook受信
-app.post("/webhook", line.middleware(config), async (req, res) => {
-  try {
-    const events = req.body.events;
-    await Promise.all(events.map(handleEvent));
-    res.status(200).end();
-  } catch (err) {
-    console.error("Webhook Error:", err);
-    res.status(500).end();
-  }
+app.post('/webhook', line.middleware(config), async (req, res) => {
+  const events = req.body.events;
+  const results = await Promise.all(events.map(handleEvent));
+  res.json(results);
 });
 
 async function handleEvent(event) {
-  if (event.type !== "message") return;
-  const msg = event.message;
+  if (event.type !== 'message') return null;
 
-  // テキストメッセージ応答
-  if (msg.type === "text") {
+  const message = event.message;
+
+  // ✅ 画像メッセージ
+  if (message.type === 'image') {
+    try {
+      const stream = await client.getMessageContent(message.id);
+      const tempPath = path.join(__dirname, 'temp.jpg');
+      const writer = fs.createWriteStream(tempPath);
+      stream.pipe(writer);
+
+      await new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+      });
+
+      // Cloudinaryにアップロード
+      const uploadResult = await cloudinary.uploader.upload(tempPath, {
+        folder: 'kumao_images',
+      });
+
+      fs.unlinkSync(tempPath); // 一時ファイル削除
+
+      // OpenAI Vision API呼び出し
+      const visionResponse = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4-vision-preview',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'この画像を見て質問に答えてください。' },
+                { type: 'image_url', image_url: { url: uploadResult.secure_url } },
+              ],
+            },
+          ],
+          max_tokens: 1000,
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const replyText = visionResponse.data.choices[0].message.content;
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: replyText,
+      });
+    } catch (err) {
+      console.error('[画像処理エラー]', err);
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '画像の処理中にエラーが発生しました。形式やサイズを確認してください。',
+      });
+    }
+  }
+
+  // ✅ テキストメッセージ
+  if (message.type === 'text') {
     return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: `くまお先生だよ！ご質問ありがとう♪：「${msg.text}」だね！ただいま考え中…(●´ω｀●)`,
+      type: 'text',
+      text: `くまお先生だよ🐻\n「${message.text}」ですね！画像も送ってくれたらもっと詳しく見れるよ！`,
     });
   }
 
-  // 画像メッセージ処理
-  if (msg.type === "image") {
-    try {
-      const stream = await client.getMessageContent(msg.id);
-      const buffers = [];
-      for await (const chunk of stream) {
-        buffers.push(chunk);
-      }
-      const buffer = Buffer.concat(buffers);
-
-      // Cloudinaryへアップロード
-      const result = await cloudinary.uploader.upload_stream({ resource_type: "image" }, async (error, result) => {
-        if (error) {
-          console.error("Cloudinary Error:", error);
-          await client.replyMessage(event.replyToken, {
-            type: "text",
-            text: "画像アップロードに失敗しました…(´・ω・｀) もう一度送ってくれる？",
-          });
-          return;
-        }
-
-        // OpenAI Visionに送信
-        const imageUrl = result.secure_url;
-        const aiResponse = await askGPTWithImage(imageUrl);
-
-        await client.replyMessage(event.replyToken, {
-          type: "text",
-          text: aiResponse,
-        });
-      });
-
-      // 書き込みストリームへバッファ送信
-      const writeStream = result;
-      writeStream.end(buffer);
-
-    } catch (err) {
-      console.error("Image Error:", err);
-      return client.replyMessage(event.replyToken, {
-        type: "text",
-        text: "画像の処理中にエラーが発生しました💦 形式やサイズを確認してもう一度送ってね！",
-      });
-    }
-  }
+  return null;
 }
 
-// OpenAI Visionへ送信
-async function askGPTWithImage(imageUrl) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const response = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      model: "gpt-4-vision-preview",
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "この画像について詳しく説明して！" },
-            {
-              type: "image_url",
-              image_url: {
-                url: imageUrl,
-              },
-            },
-          ],
-        },
-      ],
-      max_tokens: 1000,
-    },
-    {
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-    }
-  );
-  return response.data.choices[0].message.content;
-}
-
-// サーバー起動
+// ✅ サーバー起動
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
+  console.log(`くまお先生サーバー起動中🌏 ポート: ${port}`);
 });
