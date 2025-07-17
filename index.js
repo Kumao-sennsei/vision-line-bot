@@ -19,6 +19,7 @@ app.post('/webhook', async (req, res) => {
   try {
     const events = req.body.events;
     for (const event of events) {
+      console.log(JSON.stringify(event, null, 2));
       if (event.type === 'message' && event.message.type === 'text') {
         await client.replyMessage(event.replyToken, {
           type: 'text',
