@@ -27,13 +27,21 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 async function handleEvent(event) {
   if (event.type !== 'message') return null;
 
-  // ✅ 画像メッセージ処理
+  // ✅ 画像処理対応
   if (event.message.type === 'image') {
     try {
       const stream = await client.getMessageContent(event.message.id);
       const buffer = await rawBody(stream);
-      const base64Image = buffer.toString('base64');
 
+      // MIMEタイプ自動取得（image/jpeg, image/pngなど）
+      const contentType = stream.headers['content-type'] || 'image/jpeg';
+      const base64Image = buffer.toString('base64');
+      const imageUrl = `data:${contentType};base64,${base64Image}`;
+
+      console.log('✅画像取得成功！サイズ:', buffer.length, 'bytes');
+      console.log('✅Content-Type:', contentType);
+
+      // Vision APIへ送信
       const visionResponse = await axios.post(
         'https://api.openai.com/v1/chat/completions',
         {
@@ -46,7 +54,7 @@ async function handleEvent(event) {
                 {
                   type: 'image_url',
                   image_url: {
-                    url: `data:image/jpeg;base64,${base64Image}`,
+                    url: imageUrl,
                   },
                 },
               ],
@@ -69,7 +77,7 @@ async function handleEvent(event) {
       });
 
     } catch (error) {
-      console.error('Vision連携エラー:', error);
+      console.error('❌ Vision処理エラー:', error.message);
       return client.replyMessage(event.replyToken, {
         type: 'text',
         text: '画像の処理中にエラーが発生しました💥\nくまお先生、ちょっと休憩中かも？',
@@ -77,7 +85,7 @@ async function handleEvent(event) {
     }
   }
 
-  // ✅ テキストメッセージ処理
+  // ✅ テキストメッセージ
   if (event.message.type === 'text') {
     return client.replyMessage(event.replyToken, {
       type: 'text',
