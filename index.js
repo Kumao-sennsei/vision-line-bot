@@ -41,12 +41,12 @@ async function handleEvent(event) {
       const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
         {
-          model: 'gpt-4o', // ←ここが重要！！
+          model: 'gpt-4o', // ← 最新＆Vision対応モデル
           messages: [
             {
               role: 'user',
               content: [
-                { type: 'text', text: 'この画像を見て答えてください。' },
+                { type: 'text', text: 'LaTeXなどは使わず、画像に写っている内容をやさしく丁寧に日本語で説明してください。分数や平方根などは記号でお願いします。' },
                 {
                   type: 'image_url',
                   image_url: { url: imageUrl },
@@ -64,7 +64,17 @@ async function handleEvent(event) {
         }
       );
 
-      const replyText = response.data.choices[0].message.content || '画像の解析結果がありませんでした。';
+      // ✅ LaTeX記法っぽい数式を整形！
+      let replyText = response.data.choices[0].message.content || '解析結果が見つかりませんでした。';
+      replyText = replyText
+        .replace(/\\frac{(.*?)}{(.*?)}/g, '($1)/($2)') // \frac → (a)/(b)
+        .replace(/\\sqrt{(.*?)}/g, '√($1)')           // \sqrt → √
+        .replace(/\\pm/g, '±')                        // \pm → ±
+        .replace(/\\\[|\\\]|\\\(|\\\)/g, '')          // \[ \] \( \) → 空文字
+        .replace(/\^2/g, '²')                         // ^2 → ²
+        .replace(/\^3/g, '³')                         // ^3 → ³
+        .replace(/\^([0-9])/g, '^$1');                // その他の ^n はそのまま
+
       return client.replyMessage(event.replyToken, {
         type: 'text',
         text: `くまお先生の回答だよ🐻✨\n\n${replyText}`,
@@ -74,7 +84,7 @@ async function handleEvent(event) {
       console.error('❌ Visionエラー:', error.response?.data || error.message);
       return client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '画像の解析中にエラーが出たよ💥\nAPIキーやモデル名を確認してね！',
+        text: '画像の解析中にエラーが発生しました💥\nくまお先生、少し休憩中かも？',
       });
     }
   }
