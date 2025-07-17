@@ -1,99 +1,97 @@
-// index.js  —  くまお先生バージョン 🐻
+// index.js     ←このまま貼り替えれば OK
+import 'dotenv/config';
+import express from 'express';
+import { middleware, Client } from '@line/bot-sdk';
+import OpenAI from 'openai';
+import cloudinary from 'cloudinary';
 
-const express = require('express');
-const line      = require('@line/bot-sdk');
-const { Configuration, OpenAIApi } = require('openai');
-
-// ── 環境変数 ─────────────────────────────────
-require('dotenv').config();                 // .env があれば読み込む
+// ──── env ──────────────────────────────────────────────
 const {
   LINE_CHANNEL_ACCESS_TOKEN,
   LINE_CHANNEL_SECRET,
   OPENAI_API_KEY,
+  CLOUDINARY_CLOUD_NAME,
+  CLOUDINARY_API_KEY,
+  CLOUDINARY_API_SECRET,
 } = process.env;
 
-// ── LINE SDK 設定 ────────────────────────────
-const config = {
+// ──── LINE & OpenAI クライアント ────────────────────────
+const lineConfig = {
   channelAccessToken: LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret:      LINE_CHANNEL_SECRET,
+  channelSecret: LINE_CHANNEL_SECRET,
 };
-const client = new line.Client(config);
+const lineClient = new Client(lineConfig);
 
-// ── Express ───────────────────────────────────
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+cloudinary.v2.config({
+  cloud_name: CLOUDINARY_CLOUD_NAME,
+  api_key: CLOUDINARY_API_KEY,
+  api_secret: CLOUDINARY_API_SECRET,
+});
+
+// ──── Express ──────────────────────────────────────────
 const app = express();
-app.use(express.json());
+app.get('/', (_, res) => res.send('Kumao bot is running!'));
 
-// ── くまお先生のテキスト返信 ───────────────────
-const kumaoReply = (text) =>
-  `🐻 くまお先生だよ！\n「${text}」って言ったんだね。\nうんうん、なるほど〜！今日もいっしょにがんばろうね♪`;
-
-// ── Webhook ───────────────────────────────────
-app.post('/webhook', line.middleware(config), (req, res) => {
+// Webhook
+app.post('/webhook', middleware(lineConfig), (req, res) => {
   Promise.all(req.body.events.map(handleEvent))
-    .then((result) => res.json(result))
+    .then(() => res.status(200).end())
     .catch((err) => {
       console.error(err);
       res.status(500).end();
     });
 });
 
-// ── メインハンドラ ───────────────────────────
+// ──── イベント処理 ──────────────────────────────────────
 async function handleEvent(event) {
   if (event.type !== 'message') return;
 
-  // ── テキスト ───────────────────────────────
   if (event.message.type === 'text') {
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: kumaoReply(event.message.text.trim()),
-    });
+    // やさしくおもしろく Echo
+    const reply = `🐻くまお先生：『${event.message.text}』…なるほど、いい質問だね！`;
+    return lineClient.replyMessage(event.replyToken, { type: 'text', text: reply });
   }
 
-  // ── 画像 ───────────────────────────────────
   if (event.message.type === 'image') {
     try {
-      // 1) LINE から画像を取得
-      const stream = await client.getMessageContent(event.message.id);
-      const chunks = [];
-      stream.on('data', (c) => chunks.push(c));
-      await new Promise((rs, rj) => {
-        stream.on('end', rs);
-        stream.on('error', rj);
+      // 画像データ取得
+      const stream = await lineClient.getMessageContent(event.message.id);
+      const uploadRes = await new Promise((resolve, reject) => {
+        const upload = cloudinary.v2.uploader.upload_stream(
+          { resource_type: 'image' },
+          (err, result) => (err ? reject(err) : resolve(result))
+        );
+        stream.pipe(upload);
       });
-      const buffer = Buffer.concat(chunks);
 
-      // 2) OpenAI Vision に投げる
-      const openai = new OpenAIApi(new Configuration({ apiKey: OPENAI_API_KEY }));
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-vision-preview',
+      // OpenAI Vision に投げる
+      const aiRes = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'user',
             content: [
-              { type: 'image_url', image_url: `data:image/jpeg;base64,${buffer.toString('base64')}` },
-              { type: 'text',      text: 'この画像を日本語で簡単に説明してください。' },
+              { type: 'text', text: 'この画像を小学生にもわかるように説明して！' },
+              { type: 'image_url', image_url: { url: uploadRes.secure_url } },
             ],
           },
         ],
       });
 
-      const aiText = completion.choices[0].message.content.trim();
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `🐻 くまお先生の画像説明だよ！\n${aiText}`,
-      });
+      const description = aiRes.choices[0].message.content.trim();
+      return lineClient.replyMessage(event.replyToken, { type: 'text', text: description });
     } catch (err) {
       console.error(err);
-      return client.replyMessage(event.replyToken, {
+      return lineClient.replyMessage(event.replyToken, {
         type: 'text',
-        text: '🐻 くまお先生だよ！画像の解析に失敗しちゃった、ごめんね💦',
+        text: 'ごめんね、画像の説明に失敗しちゃった…🐻💦',
       });
     }
   }
 }
 
-// ── 起動 ─────────────────────────────────────
-const port = process.env.PORT || 8080;
-app.listen(port, () => console.log(`Bot on ${port}`));
-
-module.exports = app;
+// ──── サーバ起動 ────────────────────────────────────────
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log('Bot on', PORT));
