@@ -38,16 +38,15 @@ async function handleEvent(event) {
       console.log('✅画像取得成功！サイズ:', buffer.length, 'bytes');
       console.log('✅Content-Type:', contentType);
 
-      // ✅ Vision APIへ送信（モデル指定：gpt-4-vision-preview）
       const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
         {
-          model: 'gpt-4-vision-preview',
+          model: 'gpt-4o', // ←ここが重要！！
           messages: [
             {
               role: 'user',
               content: [
-                { type: 'text', text: 'この画像について説明してください。' },
+                { type: 'text', text: 'この画像を見て答えてください。' },
                 {
                   type: 'image_url',
                   image_url: { url: imageUrl },
@@ -75,7 +74,7 @@ async function handleEvent(event) {
       console.error('❌ Visionエラー:', error.response?.data || error.message);
       return client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '画像の解析中にエラーが出たよ💥\nAPIキーやモデル権限を確認してね！',
+        text: '画像の解析中にエラーが出たよ💥\nAPIキーやモデル名を確認してね！',
       });
     }
   }
