@@ -1,3 +1,5 @@
+console.log("✅ LINE Bot 起動成功！");
+
 // ---------- 必要なライブラリ ----------
 const express = require('express');
 const axios = require('axios');
