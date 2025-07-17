@@ -1,4 +1,4 @@
-// LINE Vision Bot（くまお先生）完全版：画像対応＋会話返信＋クイズ＋LaTeX整形＋やさしい再解説！
+// LINE Vision Bot（くまお先生）完全修正版：画像対応＋会話返信＋クイズ＋LaTeX整形＋やさしい再解説＋安定動作！
 
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
@@ -33,7 +33,7 @@ function convertLatexToReadable(text) {
     .replace(/\^2/g, '²')
     .replace(/\^3/g, '³')
     .replace(/\\/g, '')
-    .replace(/\bsqrt\b/g, '√')
+    .replace(/\bsqrt\b/gi, '√')
     .replace(/sprt/gi, '√')
     .replace(/\bpm\b/g, '±')
     .replace(/\bneq\b/g, '≠')
@@ -57,7 +57,11 @@ function convertLatexToReadable(text) {
     .replace(/\\n/g, '\n');
 }
 
-app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) => { req.rawBody = buf } }), async (req, res) => {
+app.use('/webhook', middleware(config), express.json({
+  verify: (req, res, buf) => { req.rawBody = buf; }
+}));
+
+app.post('/webhook', async (req, res) => {
   const events = req.body.events;
   for (const event of events) {
     if (event.type === 'message') {
@@ -65,7 +69,7 @@ app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) 
         const messageId = event.message.id;
         try {
           const stream = await client.getMessageContent(messageId);
-          const contentType = stream.contentType || 'image/png';
+          const contentType = stream.contentType || 'image/jpeg';
           const chunks = [];
           for await (const chunk of stream) chunks.push(chunk);
           const buffer = Buffer.concat(chunks);
@@ -79,10 +83,10 @@ app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) 
                 {
                   role: 'user',
                   content: [
-                    { type: 'text', text: 'この画像の内容を日本語で解説して。数式は読みやすく整えてください。' },
+                    { type: 'text', text: 'この画像を日本語で解説して。数式は読みやすくしてね。' },
                     { type: 'image_url', image_url: { url: `data:${contentType};base64,${base64Image}` } },
-                  ],
-                },
+                  ]
+                }
               ],
               max_tokens: 1000,
             },
@@ -102,10 +106,10 @@ app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) 
             text: explanation,
           });
         } catch (err) {
-          console.error('Vision APIエラー:', err.message);
+          console.error('画像処理エラー:', err.message);
           await client.replyMessage(event.replyToken, {
             type: 'text',
-            text: '画像の処理中にエラーが発生しました。画像形式やサイズを確認してください。',
+            text: '画像の処理中にエラーが発生しました。形式やサイズを確認してね！',
           });
         }
       } else if (event.message.type === 'text') {
@@ -116,9 +120,9 @@ app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) 
           if (userText === lastQuizAnswer.toLowerCase()) {
             reply = '正解だよ！さすがくまお先生の生徒✨';
           } else if (userText === 'd') {
-            reply = `そっか、ちょっとむずかしかったね！じゃあもう一度、やさしく説明するね：\n\n${lastExplanation}`;
+            reply = `そっか、ちょっとむずかしかったね！もう一度、くまお先生がやさしく説明するよ：\n\n${lastExplanation}`;
           } else {
-            reply = `うーん、ちょっとちがったみたい💦 もう一度、くまお先生がやさしく解説するよ：\n\n${lastExplanation}`;
+            reply = `うーん、ちょっとちがったみたい💦 もう一度、くまお先生がやさしく解説するね：\n\n${lastExplanation}`;
           }
 
           await client.replyMessage(event.replyToken, {
@@ -126,14 +130,14 @@ app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) 
             text: reply,
           });
         } else {
-          const prompt = `以下の文章に関する理解を深めるための4択クイズ（A〜D）を1問作成してください。日本語で優しい口調でお願いします。最後に正解だけ教えてください。\n\n${userText}`;
+          const prompt = `以下の内容に関する4択クイズ（A〜D）を1問作ってください。日本語でやさしく。最後に正解を教えてください。\n\n${userText}`;
           try {
             const quizRes = await axios.post(
               'https://api.openai.com/v1/chat/completions',
               {
                 model: 'gpt-4',
                 messages: [
-                  { role: 'user', content: prompt },
+                  { role: 'user', content: prompt }
                 ],
                 max_tokens: 800,
               },
@@ -141,7 +145,7 @@ app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) 
                 headers: {
                   'Content-Type': 'application/json',
                   Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-                },
+                }
               }
             );
 
@@ -160,14 +164,14 @@ app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) 
                   { type: 'action', action: { type: 'message', label: 'B', text: 'B' } },
                   { type: 'action', action: { type: 'message', label: 'C', text: 'C' } },
                   { type: 'action', action: { type: 'message', label: 'ちょっと分からない…', text: 'D' } },
-                ],
-              },
+                ]
+              }
             });
           } catch (err) {
             console.error('クイズ生成エラー:', err.message);
             await client.replyMessage(event.replyToken, {
               type: 'text',
-              text: 'くまお先生の確認テストを作るのに失敗しちゃった💦 もう一度試してみてね！',
+              text: 'くまお先生の確認テストを作れなかったみたい💦 もう一度ためしてね！'
             });
           }
         }
