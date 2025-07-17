@@ -1,8 +1,8 @@
-import express from 'express';
-import { middleware, Client } from '@line/bot-sdk';
-import axios from 'axios';
-import dotenv from 'dotenv';
-import getRawBody from 'raw-body';
+const express = require('express');
+const { middleware, Client } = require('@line/bot-sdk');
+const axios = require('axios');
+const dotenv = require('dotenv');
+const getRawBody = require('raw-body');
 
 dotenv.config();
 
@@ -16,7 +16,7 @@ const config = {
 
 const client = new Client(config);
 
-// 画像読み取り用
+// Webhook
 app.post('/webhook', middleware(config), async (req, res) => {
   const events = req.body.events;
   for (const event of events) {
@@ -37,7 +37,7 @@ app.post('/webhook', middleware(config), async (req, res) => {
               messages: [
                 {
                   role: 'system',
-                  content: 'あなたはやさしくて親しみやすい数学の先生「くまお先生」です。生徒が画像を送ってきたら、画像内の数式を読み取り、やさしく会話しながら丁寧に説明してください。数式の意味や解き方、注意点なども会話風に含めてください。答えだけではなく、考え方や理由も話すことが大切です。',
+                  content: 'あなたはやさしくて親しみやすい数学の先生「くまお先生」です。画像を送ってきた生徒に、やさしく会話しながら丁寧に数式の意味と解き方を説明してください。解答だけでなく考え方や注意点も大切に教えてあげてください。',
                 },
                 {
                   role: 'user',
@@ -66,7 +66,7 @@ app.post('/webhook', middleware(config), async (req, res) => {
 
           let replyText = response.data.choices[0].message.content;
 
-          // LaTeX風 → 読みやすく変換
+          // LaTeX変換を読みやすく整形
           replyText = replyText
             .replace(/\\frac{(.*?)}{(.*?)}/g, '($1)/($2)')
             .replace(/\\sqrt{(.*?)}/g, '√($1)')
@@ -84,14 +84,13 @@ app.post('/webhook', middleware(config), async (req, res) => {
           console.error('❌ Visionエラー:', error?.response?.data || error.message);
           await client.replyMessage(event.replyToken, {
             type: 'text',
-            text: 'くまお先生ちょっと休憩中かも…💤　もう一度送ってみてね！',
+            text: 'くまお先生ちょっと休憩中かも…💤　もう一回だけ試してみてね📷✨',
           });
         }
       } else {
-        // テキスト等その他メッセージに対して
         await client.replyMessage(event.replyToken, {
           type: 'text',
-          text: `🧸くまお先生だよ！画像で質問してくれたら、読み取ってお答えするね📷✨`,
+          text: `🧸くまお先生だよ！画像で質問してくれたら、読み取ってわかりやすく解説するよ📸✨`,
         });
       }
     }
@@ -100,5 +99,5 @@ app.post('/webhook', middleware(config), async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ くまおBot起動中 🧸🎓 ポート番号: ${PORT}`);
+  console.log(`✅ くまおBot起動中 🧸 ポート番号: ${PORT}`);
 });
