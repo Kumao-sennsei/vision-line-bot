@@ -1,4 +1,4 @@
-// LINE Vision Bot（くまお先生）LaTeX変換＆Web検索＆クイズ評価＆再解説対応！
+// LINE Vision Bot（くまお先生）LaTeX変換＆Web検索＆クイズ評価＆再解説＆画像対応！
 
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
@@ -35,7 +35,6 @@ function convertLatexToReadable(text) {
     .replace(/\\/g, '')
     .replace(/\bsqrt\b/g, '√')
     .replace(/\bsprt\b/gi, '√')
-    .replace(/\bsprt/gi, '√')
     .replace(/sprt/gi, '√')
     .replace(/\bpm\b/g, '±')
     .replace(/\bneq\b/g, '≠')
@@ -59,5 +58,56 @@ function convertLatexToReadable(text) {
     .replace(/\\n/g, '\n');
 }
 
-// 🔁 D選択肢「ちょっとわからない」対応を含めた本気モード再解説は、
-// クイズの回答処理部分と組み合わせてLINEメッセージで分岐を追加することで実装可能！
+app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) => { req.rawBody = buf } }), async (req, res) => {
+  const events = req.body.events;
+  for (const event of events) {
+    if (event.type === 'message' && event.message.type === 'image') {
+      const messageId = event.message.id;
+      const stream = await client.getMessageContent(messageId);
+      const chunks = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      const buffer = Buffer.concat(chunks);
+      const base64Image = buffer.toString('base64');
+
+      try {
+        const response = await axios.post(
+          'https://api.openai.com/v1/chat/completions',
+          {
+            model: 'gpt-4-vision-preview',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: 'この画像の内容を日本語で解説して。数式はわかりやすく整えてください。' },
+                  { type: 'image_url', image_url: { url: `data:image/png;base64,${base64Image}` } },
+                ],
+              },
+            ],
+            max_tokens: 1000,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            },
+          }
+        );
+
+        const explanation = convertLatexToReadable(response.data.choices[0].message.content);
+        lastExplanation = explanation;
+
+        await client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: explanation,
+        });
+      } catch (err) {
+        console.error('Vision APIエラー:', err.message);
+        await client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '画像の処理中にエラーが発生しました。画像形式やサイズを確認してください。',
+        });
+      }
+    }
+  }
+  res.status(200).end();
+});
