@@ -63,13 +63,14 @@ app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) 
     if (event.type === 'message') {
       if (event.message.type === 'image') {
         const messageId = event.message.id;
-        const stream = await client.getMessageContent(messageId);
-        const chunks = [];
-        for await (const chunk of stream) chunks.push(chunk);
-        const buffer = Buffer.concat(chunks);
-        const base64Image = buffer.toString('base64');
-
         try {
+          const stream = await client.getMessageContent(messageId);
+          const contentType = stream.contentType || 'image/png';
+          const chunks = [];
+          for await (const chunk of stream) chunks.push(chunk);
+          const buffer = Buffer.concat(chunks);
+          const base64Image = buffer.toString('base64');
+
           const response = await axios.post(
             'https://api.openai.com/v1/chat/completions',
             {
@@ -79,7 +80,7 @@ app.post('/webhook', middleware(config), express.json({ verify: (req, res, buf) 
                   role: 'user',
                   content: [
                     { type: 'text', text: 'この画像の内容を日本語で解説して。数式は読みやすく整えてください。' },
-                    { type: 'image_url', image_url: { url: `data:image/png;base64,${base64Image}` } },
+                    { type: 'image_url', image_url: { url: `data:${contentType};base64,${base64Image}` } },
                   ],
                 },
               ],
