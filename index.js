@@ -1,96 +1,72 @@
-require('dotenv').config();
-const axios   = require('axios');
-const express = require('express');
-const line    = require('@line/bot-sdk');
+// index.js（ルートに置くだけ / まるっと置換で OK）
+import 'dotenv/config';
+import express from 'express';
+import line from '@line/bot-sdk';
+import axios from 'axios';
 
-const cfg = {
+const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret:      process.env.LINE_CHANNEL_SECRET,
 };
 
+const client = new line.Client(config);
 const app    = express();
-const client = new line.Client(cfg);
 
-/* ─────────── ① ヘルスチェック用 ─────────── */
-app.get('/', (_, res) => res.status(200).send('OK'));
-
-/* ─────────── ② ChatGPT（テキスト） ───────── */
-async function askGPT(prompt) {
-  const { data } = await axios.post(
-    'https://api.openai.com/v1/chat/completions',
-    {
-      model:    'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: prompt }],
-    },
-    { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } }
-  );
-  return data.choices[0].message.content.trim();
-}
-
-/* ─────────── ③ 画像 → Buffer ─────────── */
-const toBuffer = s =>
-  new Promise((ok, ng) => {
-    const c = [];
-    s.on('data', d => c.push(d));
-    s.on('end',  () => ok(Buffer.concat(c)));
-    s.on('error', ng);
-  });
-
-/* ─────────── ④ Webhook ──────────────── */
-app.post('/webhook', line.middleware(cfg), async (req, res) => {
-  await Promise.all(req.body.events.map(handle));
-  res.sendStatus(200);
+// 署名検証付き Webhook エンドポイント
+app.post('/webhook', line.middleware(config), async (req, res) => {
+  try {
+    await Promise.all(req.body.events.map(handleEvent));
+    res.status(200).end();
+  } catch (e) {
+    console.error(e);
+    res.status(500).end();
+  }
 });
 
-async function handle(e) {
-  if (e.type !== 'message') return;
+// イベントごとのハンドラ
+async function handleEvent(event) {
+  if (event.type !== 'message') return;
 
-  /* — テキスト — */
-  if (e.message.type === 'text') {
-    const reply = await askGPT(e.message.text);
-    return client.replyMessage(e.replyToken, { type: 'text', text: reply });
+  const { message } = event;
+
+  // --- ① テキスト ----------------------------
+  if (message.type === 'text') {
+    return client.replyMessage(event.replyToken, {
+      type : 'text',
+      text : `Echo: ${message.text}`,
+    });
   }
 
-  /* — 画像 — */
-  if (e.message.type === 'image') {
-    await client.replyMessage(e.replyToken, {
-      type: 'text', text: '画像受け取ったよ！解析中…',
-    });
-
+  // --- ② 画像 -------------------------------
+  if (message.type === 'image') {
     try {
-      const s   = await client.getMessageContent(e.message.id);
-      const b64 = (await toBuffer(s)).toString('base64');
+      // 元画像バイナリを取得
+      const stream  = await client.getMessageContent(message.id);
+      const chunks  = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      const buffer  = Buffer.concat(chunks);
 
-      const { data } = await axios.post(
-        'https://api.openai.com/v1/chat/completions',
-        {
-          model: 'gpt-4o-vision-preview',
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'image_url', image_url: `data:image/jpeg;base64,${b64}` },
-              { type: 'text',      text: 'この画像を日本語で簡単に説明して' }
-            ]
-          }]
-        },
-        { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } }
-      );
+      // ★ここで外部 API に buffer を送る、または簡易判定だけ返す例
+      // 今回はサイズを返すだけのダミー
+      const info = `画像を受信しました！サイズ: ${buffer.length} byte`;
 
-      return client.pushMessage(
-        e.source.userId,
-        { type: 'text', text: data.choices[0].message.content.trim() }
-      );
-
+      return client.replyMessage(event.replyToken, { type: 'text', text: info });
     } catch (err) {
-      console.error('[OpenAI]', err.response?.status, err.response?.data);
-      return client.pushMessage(
-        e.source.userId,
-        { type: 'text', text: '画像の解析に失敗しちゃった💦' }
-      );
+      console.error('Image handle error:', err);
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '画像の解析に失敗しました🙏',
+      });
     }
   }
+
+  // 他メッセージタイプ
+  return client.replyMessage(event.replyToken, {
+    type: 'text',
+    text: 'テキストか画像を送ってね！',
+  });
 }
 
-/* ─────────── ⑤ Listen ──────────────── */
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log('Bot on ' + port));
+// --------------------------------------------
+const port = process.env.PORT || 8080;
+app.listen(port, () => console.log(`Bot on ${port}`));
