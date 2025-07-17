@@ -1,10 +1,11 @@
-// index.js  ―  まるっとコピペ用 🐻
+// index.js  —  くまお先生バージョン 🐻
 
 const express = require('express');
 const line      = require('@line/bot-sdk');
 const { Configuration, OpenAIApi } = require('openai');
 
 // ── 環境変数 ─────────────────────────────────
+require('dotenv').config();                 // .env があれば読み込む
 const {
   LINE_CHANNEL_ACCESS_TOKEN,
   LINE_CHANNEL_SECRET,
@@ -27,24 +28,20 @@ const kumaoReply = (text) =>
   `🐻 くまお先生だよ！\n「${text}」って言ったんだね。\nうんうん、なるほど〜！今日もいっしょにがんばろうね♪`;
 
 // ── Webhook ───────────────────────────────────
-app.post(
-  '/webhook',
-  line.middleware(config),
-  (req, res) => {
-    Promise.all(req.body.events.map(handleEvent))
-      .then((result) => res.json(result))
-      .catch((err) => {
-        console.error(err);
-        res.status(500).end();
-      });
-  },
-);
+app.post('/webhook', line.middleware(config), (req, res) => {
+  Promise.all(req.body.events.map(handleEvent))
+    .then((result) => res.json(result))
+    .catch((err) => {
+      console.error(err);
+      res.status(500).end();
+    });
+});
 
 // ── メインハンドラ ───────────────────────────
 async function handleEvent(event) {
   if (event.type !== 'message') return;
 
-  // ―― テキスト ――――――――――――――――――――――――――
+  // ── テキスト ───────────────────────────────
   if (event.message.type === 'text') {
     return client.replyMessage(event.replyToken, {
       type: 'text',
@@ -52,10 +49,10 @@ async function handleEvent(event) {
     });
   }
 
-  // ―― 画像 ――――――――――――――――――――――――――――
+  // ── 画像 ───────────────────────────────────
   if (event.message.type === 'image') {
     try {
-      // 1) LINE から画像取得
+      // 1) LINE から画像を取得
       const stream = await client.getMessageContent(event.message.id);
       const chunks = [];
       stream.on('data', (c) => chunks.push(c));
@@ -65,7 +62,7 @@ async function handleEvent(event) {
       });
       const buffer = Buffer.concat(chunks);
 
-      // 2) OpenAI Vision へ送信
+      // 2) OpenAI Vision に投げる
       const openai = new OpenAIApi(new Configuration({ apiKey: OPENAI_API_KEY }));
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o-vision-preview',
