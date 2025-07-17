@@ -1,4 +1,4 @@
-// LINE Vision Bot（くまお先生）進化系：画像対応＋クイズ正誤応答＋やさしい再説明＋式整形完全対応
+// LINE Vision Bot（くまお先生）進化系：画像対応＋クイズ正誤応答＋やさしい再説明＋式整形完全対応＋会話対応
 
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
@@ -70,7 +70,6 @@ app.post('/webhook', async (req, res) => {
         const messageId = event.message.id;
         try {
           const stream = await client.getMessageContent(messageId);
-          const contentType = stream.contentType || 'image/jpeg';
           const chunks = [];
           for await (const chunk of stream) chunks.push(chunk);
           const buffer = Buffer.concat(chunks);
@@ -85,7 +84,7 @@ app.post('/webhook', async (req, res) => {
                   role: 'user',
                   content: [
                     { type: 'text', text: 'この画像を日本語で解説して。数式は読みやすくしてね。' },
-                    { type: 'image_url', image_url: { url: `data:${contentType};base64,${base64Image}` } },
+                    { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Image}` } },
                   ]
                 }
               ],
@@ -114,32 +113,38 @@ app.post('/webhook', async (req, res) => {
           });
         }
       } else if (event.message.type === 'text') {
-        const userText = event.message.text.trim().toLowerCase();
+        const userText = event.message.text.trim();
+        const lowerText = userText.toLowerCase();
 
-        if (['a', 'b', 'c', 'd'].includes(userText)) {
+        const greetings = ['こんにちは', 'こんばんは', 'おはよう', 'やっほー', 'ありがとう'];
+        if (greetings.includes(userText)) {
+          await client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: 'やっほー！くまお先生だよ🐻✨ なんでも質問してね！',
+          });
+          continue;
+        }
+
+        if (['a', 'b', 'c', 'd'].includes(lowerText)) {
           let reply;
-          if (userText === lastQuizAnswer.toLowerCase()) {
+          if (lowerText === lastQuizAnswer.toLowerCase()) {
             reply = `正解だよ！✨すごいね！\n\n${lastExplanation}`;
           } else {
             reply = `ちょっとちがったみたい💦\n\nもう一度くまお先生がやさしく解説するね：\n\n${lastQuizDetail}`;
           }
-
           await client.replyMessage(event.replyToken, {
             type: 'text',
             text: reply,
           });
         } else {
-          const prompt = `以下の内容に関する4択クイズ（A〜D）を1問作ってください。日本語でやさしく、最後に「正解：A」などと記載し、そのあとに正解の理由や丁寧な解説もつけてください。
-
-${userText}`;
-
           try {
-            const quizRes = await axios.post(
+            const qaRes = await axios.post(
               'https://api.openai.com/v1/chat/completions',
               {
                 model: 'gpt-4',
                 messages: [
-                  { role: 'user', content: prompt }
+                  { role: 'system', content: 'あなたはやさしい家庭教師「くまお先生」です。会話形式で質問に答えてください。' },
+                  { role: 'user', content: userText }
                 ],
                 max_tokens: 1000,
               },
@@ -151,29 +156,18 @@ ${userText}`;
               }
             );
 
-            const content = quizRes.data.choices[0].message.content;
-            const parts = content.split(/正解[:：]\s?/);
-            const quiz = parts[0].trim();
-            lastQuizAnswer = (parts[1] || '').trim().charAt(0).toLowerCase();
-            lastQuizDetail = convertLatexToReadable(content);
+            const explanation = convertLatexToReadable(qaRes.data.choices[0].message.content);
+            lastExplanation = explanation;
 
             await client.replyMessage(event.replyToken, {
               type: 'text',
-              text: `くまお先生の確認テストだよ✨\n\n${quiz}\n\nA, B, C, D（ちょっと分からない…）から選んでね！`,
-              quickReply: {
-                items: [
-                  { type: 'action', action: { type: 'message', label: 'A', text: 'A' } },
-                  { type: 'action', action: { type: 'message', label: 'B', text: 'B' } },
-                  { type: 'action', action: { type: 'message', label: 'C', text: 'C' } },
-                  { type: 'action', action: { type: 'message', label: 'ちょっと分からない…', text: 'D' } },
-                ]
-              }
+              text: explanation,
             });
           } catch (err) {
-            console.error('クイズ生成エラー:', err.message);
+            console.error('会話応答エラー:', err.message);
             await client.replyMessage(event.replyToken, {
               type: 'text',
-              text: 'くまお先生の確認テストを作れなかったみたい💦 もう一度ためしてね！'
+              text: 'くまお先生、ちょっと疲れてるみたい💦 また質問してね！'
             });
           }
         }
