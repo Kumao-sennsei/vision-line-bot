@@ -27,7 +27,6 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 async function handleEvent(event) {
   if (event.type !== 'message') return null;
 
-  // ✅ 画像メッセージ対応
   if (event.message.type === 'image') {
     try {
       const stream = await client.getMessageContent(event.message.id);
@@ -39,8 +38,8 @@ async function handleEvent(event) {
       console.log('✅画像取得成功！サイズ:', buffer.length, 'bytes');
       console.log('✅Content-Type:', contentType);
 
-      // ✅ 正しいOpenAI Visionエンドポイントで送信！
-      const visionResponse = await axios.post(
+      // ✅ Vision APIへ送信（モデル指定：gpt-4-vision-preview）
+      const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
         {
           model: 'gpt-4-vision-preview',
@@ -48,12 +47,10 @@ async function handleEvent(event) {
             {
               role: 'user',
               content: [
-                { type: 'text', text: 'この画像を見て答えてください：' },
+                { type: 'text', text: 'この画像について説明してください。' },
                 {
                   type: 'image_url',
-                  image_url: {
-                    url: imageUrl,
-                  },
+                  image_url: { url: imageUrl },
                 },
               ],
             },
@@ -62,28 +59,27 @@ async function handleEvent(event) {
         },
         {
           headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
           },
         }
       );
 
-      const replyText = visionResponse.data.choices[0].message.content || '画像の解析はできませんでした💦';
+      const replyText = response.data.choices[0].message.content || '画像の解析結果がありませんでした。';
       return client.replyMessage(event.replyToken, {
         type: 'text',
         text: `くまお先生の回答だよ🐻✨\n\n${replyText}`,
       });
 
     } catch (error) {
-      console.error('❌Vision処理エラー:', error.message);
+      console.error('❌ Visionエラー:', error.response?.data || error.message);
       return client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '画像の処理中にエラーが発生しました💥\nくまお先生、ちょっと休憩中かも？',
+        text: '画像の解析中にエラーが出たよ💥\nAPIキーやモデル権限を確認してね！',
       });
     }
   }
 
-  // ✅ テキストメッセージ対応
   if (event.message.type === 'text') {
     return client.replyMessage(event.replyToken, {
       type: 'text',
