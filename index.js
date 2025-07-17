@@ -1,5 +1,17 @@
+const express = require('express');
+const app = express();
+const line = require('@line/bot-sdk');
+
+const config = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET
+};
+
+const client = new line.Client(config);
+app.use(express.json());
+
 app.post('/webhook', async (req, res) => {
-  console.log("📩 受信イベント:", JSON.stringify(req.body, null, 2)); // ←ログ確認用！
+  console.log("📩 受信イベント:", JSON.stringify(req.body, null, 2));
 
   const events = req.body.events;
 
@@ -22,4 +34,9 @@ app.post('/webhook', async (req, res) => {
   }));
 
   res.json(results);
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
