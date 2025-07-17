@@ -1,11 +1,8 @@
-// index.js  ←今これをそのまま貼り替えれば、テキスト返信だけ確実に動きます。
-// 画像処理などは一切入れていません。まずは “くまお先生” のテキスト返信に専念。
+// index.js
+require('dotenv').config();
+const express = require('express');
+const { Client, middleware } = require('@line/bot-sdk');
 
-import 'dotenv/config';
-import express from 'express';
-import { Client, middleware } from '@line/bot-sdk';
-
-// ─── 環境変数 ──────────────────────────────
 const {
   LINE_CHANNEL_ACCESS_TOKEN,
   LINE_CHANNEL_SECRET,
@@ -13,43 +10,55 @@ const {
 } = process.env;
 
 if (!LINE_CHANNEL_ACCESS_TOKEN || !LINE_CHANNEL_SECRET) {
-  console.error('❌ LINE の環境変数が設定されていません');
+  console.error('❌ LINE トークン / シークレットが設定されていません');
   process.exit(1);
 }
 
-const lineConfig = {
+const config = {
   channelAccessToken: LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: LINE_CHANNEL_SECRET,
 };
 
-const lineClient = new Client(lineConfig);
-
-// ─── Express ───────────────────────────────
 const app = express();
-app.get('/', (_, res) => res.send('Kumao bot is alive!'));
+const client = new Client(config);
 
-// Webhook
-app.post('/webhook', middleware(lineConfig), (req, res) => {
+// ───────────────────────────
+// 生存確認
+// ───────────────────────────
+app.get('/', (_, res) => {
+  res.status(200).send('✅ Kumao先生は元気です！');
+});
+
+// ───────────────────────────
+// Webhookエンドポイント
+// ───────────────────────────
+app.post('/webhook', middleware(config), (req, res) => {
   Promise.all(req.body.events.map(handleEvent))
     .then(() => res.status(200).end())
-    .catch((err) => {
-      console.error(err);
+    .catch(err => {
+      console.error('❌ イベント処理エラー:', err);
       res.status(500).end();
     });
 });
 
-// ─── イベント処理 ─────────────────────────
+// ───────────────────────────
+// イベント処理ロジック（テキストメッセージ専用）
+// ───────────────────────────
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') return;
 
-  const userMsg = event.message.text;
-  const reply = `🐻くまお先生：『${userMsg}』…うんうん、いい質問だね！`;
-
-  return lineClient.replyMessage(event.replyToken, {
+  const userMessage = event.message.text;
+  const replyMessage = {
     type: 'text',
-    text: reply,
-  });
+    text: `🐻くまお先生：「${userMessage}」という質問だね、うんうん…良いところに気づいたね！`,
+  };
+
+  return client.replyMessage(event.replyToken, replyMessage);
 }
 
-// ─── サーバ起動 ───────────────────────────
-app.listen(PORT, () => console.log(`Kumao bot on ${PORT}`));
+// ───────────────────────────
+// サーバー起動
+// ───────────────────────────
+app.listen(PORT, () => {
+  console.log(`🚀 Kumao bot is running on port ${PORT}`);
+});
