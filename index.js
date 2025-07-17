@@ -4,9 +4,10 @@ try {
     console.log(JSON.stringify(event, null, 2));
 
     if (event.type === 'message' && event.message.type === 'text') {
-      const userMessage = event.message.text; // 🔧 ここが重要！
+      const userMessage = event.message.text;
 
       let replyMessage = '';
+
       if (userMessage.includes("こんにちは")) {
         replyMessage = "こんにちは！くまお先生だよ〜✨ 今日も質問まってるからねっ(●´ω｀●)";
       } else {
@@ -15,10 +16,13 @@ try {
 
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: replyMessage,
+        text: replyMessage
       });
     }
   }
+
+  res.status(200).send('OK');
 } catch (error) {
-  console.error('エラー発生:', error);
+  console.error('エラーが発生しました:', error);
+  res.status(500).send('サーバーエラー');
 }
