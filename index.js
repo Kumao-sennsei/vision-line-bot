@@ -1,4 +1,4 @@
-// LINE Vision Bot（くまお先生）最終進化：解説＋4択クイズ付き！（※確認テストは生徒が「確認テストお願い」と言ったときだけ出題）
+// LINE Vision Bot（くまお先生）LaTeX変換＆Web検索モード付き！
 
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
@@ -18,7 +18,26 @@ const config = {
 
 const client = new Client(config);
 
-let lastExplanation = ''; // 🔸 解説を一時保存（テスト生成用）
+let lastExplanation = '';
+
+function convertLatexToReadable(text) {
+  return text
+    .replace(/\\frac\{(.*?)\}\{(.*?)\}/g, '$1/$2')
+    .replace(/\\times/g, '×')
+    .replace(/\\div/g, '÷')
+    .replace(/\^2/g, '²')
+    .replace(/\^3/g, '³')
+    .replace(/\\sqrt\{(.*?)\}/g, '√($1)')
+    .replace(/\\cdot/g, '・')
+    .replace(/\\left\(|\\right\)/g, '')
+    .replace(/\\\[/g, '')
+    .replace(/\\\]/g, '')
+    .replace(/\\\(/g, '')
+    .replace(/\\\)/g, '')
+    .replace(/\\/g, '')
+    .replace(/\btimes\b/g, '×')
+    .replace(/\bdiv\b/g, '÷');
+}
 
 app.post('/webhook', middleware(config), async (req, res) => {
   const events = req.body.events;
@@ -36,7 +55,7 @@ app.post('/webhook', middleware(config), async (req, res) => {
             messages: [
               {
                 role: 'system',
-                content: `あなたは「くまお先生」という、やさしく丁寧に教える先生です。画像の問題に答えてください。すべて日本語で解説し、やさしい語り口でお願いします。`
+                content: `あなたは「くまお先生」という、やさしく丁寧に教える先生です。画像の問題に答えてください。すべて日本語で解説し、やさしい語り口でお願いします。LaTeXなどの難しい表現は使わず、誰にでも分かりやすく書いてください。`
               },
               {
                 role: 'user',
@@ -53,8 +72,9 @@ app.post('/webhook', middleware(config), async (req, res) => {
             }
           });
 
-          const explanation = explanationRes.data.choices[0].message.content;
-          lastExplanation = explanation; // 🔸 保存しておく
+          const explanationRaw = explanationRes.data.choices[0].message.content;
+          const explanation = convertLatexToReadable(explanationRaw);
+          lastExplanation = explanation;
 
           await client.replyMessage(event.replyToken, {
             type: 'text',
@@ -87,7 +107,7 @@ app.post('/webhook', middleware(config), async (req, res) => {
               messages: [
                 {
                   role: 'system',
-                  content: `あなたは「くまお先生」という先生で、解説の内容をもとに生徒の理解を確認するための4択クイズを作成します。A〜Cと「ちょっと分からない」の選択肢でお願いします。`
+                  content: `あなたは「くまお先生」という先生で、解説の内容をもとに生徒の理解を確認するための4択クイズを作成します。A〜Cと「ちょっと分からない」の選択肢でお願いします。LaTeXや\(\)などは使わず、普通の日本語表現でお願いします。`
                 },
                 {
                   role: 'user',
@@ -101,7 +121,8 @@ app.post('/webhook', middleware(config), async (req, res) => {
               }
             });
 
-            const quizText = quizRes.data.choices[0].message.content;
+            const quizRaw = quizRes.data.choices[0].message.content;
+            const quizText = convertLatexToReadable(quizRaw);
 
             await client.replyMessage(event.replyToken, {
               type: 'text',
@@ -115,6 +136,13 @@ app.post('/webhook', middleware(config), async (req, res) => {
               text: 'くまお先生、確認テストの準備がまだできてないみたい💦'
             });
           }
+        } else if (userMessage.startsWith('検索 ')) {
+          const query = userMessage.replace(/^検索\s+/, '');
+          await client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `🔍ごめんね！くまお先生のWeb検索機能は現在準備中なんだ💦
+将来的には「検索 ${query}」って送るだけで、ネットで調べた内容も返せるようにする予定だよ♪`
+          });
         } else {
           try {
             const response = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -136,7 +164,9 @@ app.post('/webhook', middleware(config), async (req, res) => {
               }
             });
 
-            const reply = response.data.choices[0].message.content;
+            const replyRaw = response.data.choices[0].message.content;
+            const reply = convertLatexToReadable(replyRaw);
+
             await client.replyMessage(event.replyToken, {
               type: 'text',
               text: `🐻くまお先生の返答だよ♪\n\n${reply.trim()}`
