@@ -1,8 +1,6 @@
-import express from 'express';
-import { middleware, Client } from '@line/bot-sdk';
-import dotenv from 'dotenv';
-
-dotenv.config();
+require('dotenv').config();
+const express = require('express');
+const line    = require('@line/bot-sdk');
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -10,40 +8,23 @@ const config = {
 };
 
 const app    = express();
-const client = new Client(config);
+const client = new line.Client(config);
 
-// ── Webhook ──────────────────────────────────────────
-app.post(
-  '/webhook',
-  express.raw({ type: '*/*' }),        // ← LINE 署名検証用
-  middleware(config),
-  async (req, res) => {
-    const events = req.body.events;
+// ── webhook ─────────────────────────────
+app.post('/webhook', line.middleware(config), async (req, res) => {
+  await Promise.all(req.body.events.map(handleEvent));
+  res.status(200).end();
+});
 
-    await Promise.all(
-      events.map(async (event) => {
-        if (event.type !== 'message') return;
+function handleEvent(event) {
+  if (event.type !== 'message' || event.message.type !== 'text') return null;
 
-        if (event.message.type === 'text') {
-          // テキストをそのまま返す
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `Echo: ${event.message.text}`,
-          });
-        } else {
-          // 画像・スタンプ等は未対応
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: 'ごめんね！ まだテキストしかわからないんだ🙏',
-          });
-        }
-      })
-    );
+  return client.replyMessage(event.replyToken, {
+    type: 'text',
+    text: `Echo: ${event.message.text}`,
+  });
+}
 
-    res.status(200).end();
-  }
-);
-
-// ── Listen ───────────────────────────────────────────
+// ── listen ──────────────────────────────
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Server running on ${port}`));
