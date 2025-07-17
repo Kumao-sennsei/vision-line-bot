@@ -1,185 +1,128 @@
-// LINE Vision Bot（くまお先生）進化系：画像対応＋クイズ正誤応答＋やさしい再説明＋式整形完全対応＋会話対応（画像安定化）
-
-const express = require('express');
-const { middleware, Client } = require('@line/bot-sdk');
-const axios = require('axios');
-const dotenv = require('dotenv');
-const getRawBody = require('raw-body');
-
-dotenv.config();
-
+require("dotenv").config();
+const express = require("express");
+const line = require("@line/bot-sdk");
+const axios = require("axios");
+const { v2: cloudinary } = require("cloudinary");
 const app = express();
-const PORT = process.env.PORT || 8080;
 
+// LINE設定
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
+const client = new line.Client(config);
 
-const client = new Client(config);
-
-let lastExplanation = '';
-let lastQuizAnswer = '';
-let lastQuizDetail = '';
-
-function convertLatexToReadable(text) {
-  return text
-    .replace(/\frac\{(.*?)\}\{(.*?)\}/g, '$1/$2')
-    .replace(/\times|\btimes\b|\stimes|\*|\*\*/g, '×')
-    .replace(/\div|\bdiv\b|\//g, '÷')
-    .replace(/\cdot/g, '・')
-    .replace(/\sqrt\{(.*?)\}/g, '√($1)')
-    .replace(/\left\(|\right\)/g, '')
-    .replace(/[\[\]()]/g, '')
-    .replace(/\^2/g, '²')
-    .replace(/\^3/g, '³')
-    .replace(/\\/g, '')
-    .replace(/\bsqrt\b/gi, '√')
-    .replace(/sprt/gi, '√')
-    .replace(/\bpm\b/g, '±')
-    .replace(/\bneq\b/g, '≠')
-    .replace(/\bgeq\b/g, '≥')
-    .replace(/\bleq\b/g, '≤')
-    .replace(/\balpha\b/g, 'α')
-    .replace(/\bbeta\b/g, 'β')
-    .replace(/\bgamma\b/g, 'γ')
-    .replace(/\btheta\b/g, 'θ')
-    .replace(/\blambda\b/g, 'λ')
-    .replace(/\bsigma\b/g, 'σ')
-    .replace(/\bpi\b/g, 'π')
-    .replace(/\binfty\b/g, '∞')
-    .replace(/\bln\b/g, 'ln')
-    .replace(/\blog\b/g, 'log')
-    .replace(/\bexp\b/g, 'exp')
-    .replace(/\bapprox\b/g, '≈')
-    .replace(/\bto\b/g, '→')
-    .replace(/\begin\{.*?\}|\end\{.*?\}/g, '')
-    .replace(/\$/g, '')
-    .replace(/\\n/g, '\n');
-}
-
-app.use('/webhook', middleware(config), express.json({
-  verify: (req, res, buf) => { req.rawBody = buf; }
-}));
-
-app.post('/webhook', async (req, res) => {
-  const events = req.body.events;
-  for (const event of events) {
-    if (event.type === 'message') {
-      if (event.message.type === 'image') {
-        const messageId = event.message.id;
-        try {
-          const stream = await client.getMessageContent(messageId);
-          const chunks = [];
-          for await (const chunk of stream) chunks.push(chunk);
-          const buffer = Buffer.concat(chunks);
-
-          const mimeType = buffer[0] === 0x89 ? 'image/png' : 'image/jpeg';
-          const base64Image = buffer.toString('base64');
-          const imageDataUrl = `data:${mimeType};base64,${base64Image}`;
-
-          const response = await axios.post(
-            'https://api.openai.com/v1/chat/completions',
-            {
-              model: 'gpt-4-vision-preview',
-              messages: [
-                {
-                  role: 'user',
-                  content: [
-                    { type: 'text', text: 'この画像を日本語で解説して。数式は読みやすくしてね。' },
-                    { type: 'image_url', image_url: { url: imageDataUrl } },
-                  ]
-                }
-              ],
-              max_tokens: 1000,
-            },
-            {
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              },
-            }
-          );
-
-          const explanation = convertLatexToReadable(response.data.choices[0].message.content);
-          lastExplanation = explanation;
-
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: explanation,
-          });
-        } catch (err) {
-          console.error('画像処理エラー:', err.message);
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: '画像の処理中にエラーが発生しました。形式やサイズを確認してね！',
-          });
-        }
-      } else if (event.message.type === 'text') {
-        const userText = event.message.text.trim();
-        const lowerText = userText.toLowerCase();
-
-        const greetings = ['こんにちは', 'こんばんは', 'おはよう', 'やっほー', 'ありがとう'];
-        if (greetings.includes(userText)) {
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: 'やっほー！くまお先生だよ🐻✨ なんでも質問してね！',
-          });
-          continue;
-        }
-
-        if (['a', 'b', 'c', 'd'].includes(lowerText)) {
-          let reply;
-          if (lowerText === lastQuizAnswer.toLowerCase()) {
-            reply = `正解だよ！✨すごいね！\n\n${lastExplanation}`;
-          } else {
-            reply = `ちょっとちがったみたい💦\n\nもう一度くまお先生がやさしく解説するね：\n\n${lastQuizDetail}`;
-          }
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: reply,
-          });
-        } else {
-          try {
-            const qaRes = await axios.post(
-              'https://api.openai.com/v1/chat/completions',
-              {
-                model: 'gpt-4',
-                messages: [
-                  { role: 'system', content: 'あなたはやさしい家庭教師「くまお先生」です。会話形式で質問に答えてください。' },
-                  { role: 'user', content: userText }
-                ],
-                max_tokens: 1000,
-              },
-              {
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-                }
-              }
-            );
-
-            const explanation = convertLatexToReadable(qaRes.data.choices[0].message.content);
-            lastExplanation = explanation;
-
-            await client.replyMessage(event.replyToken, {
-              type: 'text',
-              text: explanation,
-            });
-          } catch (err) {
-            console.error('会話応答エラー:', err.message);
-            await client.replyMessage(event.replyToken, {
-              type: 'text',
-              text: 'くまお先生、ちょっと疲れてるみたい💦 また質問してね！'
-            });
-          }
-        }
-      }
-    }
-  }
-  res.status(200).end();
+// Cloudinary設定
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-app.listen(PORT, () => {
-  console.log(`くまお先生起動中 🐻 ポート番号: ${PORT}`);
+// webhook受信
+app.post("/webhook", line.middleware(config), async (req, res) => {
+  try {
+    const events = req.body.events;
+    await Promise.all(events.map(handleEvent));
+    res.status(200).end();
+  } catch (err) {
+    console.error("Webhook Error:", err);
+    res.status(500).end();
+  }
+});
+
+async function handleEvent(event) {
+  if (event.type !== "message") return;
+  const msg = event.message;
+
+  // テキストメッセージ応答
+  if (msg.type === "text") {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: `くまお先生だよ！ご質問ありがとう♪：「${msg.text}」だね！ただいま考え中…(●´ω｀●)`,
+    });
+  }
+
+  // 画像メッセージ処理
+  if (msg.type === "image") {
+    try {
+      const stream = await client.getMessageContent(msg.id);
+      const buffers = [];
+      for await (const chunk of stream) {
+        buffers.push(chunk);
+      }
+      const buffer = Buffer.concat(buffers);
+
+      // Cloudinaryへアップロード
+      const result = await cloudinary.uploader.upload_stream({ resource_type: "image" }, async (error, result) => {
+        if (error) {
+          console.error("Cloudinary Error:", error);
+          await client.replyMessage(event.replyToken, {
+            type: "text",
+            text: "画像アップロードに失敗しました…(´・ω・｀) もう一度送ってくれる？",
+          });
+          return;
+        }
+
+        // OpenAI Visionに送信
+        const imageUrl = result.secure_url;
+        const aiResponse = await askGPTWithImage(imageUrl);
+
+        await client.replyMessage(event.replyToken, {
+          type: "text",
+          text: aiResponse,
+        });
+      });
+
+      // 書き込みストリームへバッファ送信
+      const writeStream = result;
+      writeStream.end(buffer);
+
+    } catch (err) {
+      console.error("Image Error:", err);
+      return client.replyMessage(event.replyToken, {
+        type: "text",
+        text: "画像の処理中にエラーが発生しました💦 形式やサイズを確認してもう一度送ってね！",
+      });
+    }
+  }
+}
+
+// OpenAI Visionへ送信
+async function askGPTWithImage(imageUrl) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const response = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: "gpt-4-vision-preview",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "この画像について詳しく説明して！" },
+            {
+              type: "image_url",
+              image_url: {
+                url: imageUrl,
+              },
+            },
+          ],
+        },
+      ],
+      max_tokens: 1000,
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+    }
+  );
+  return response.data.choices[0].message.content;
+}
+
+// サーバー起動
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`🚀 Server running on port ${port}`);
 });
