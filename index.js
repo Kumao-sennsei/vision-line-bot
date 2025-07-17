@@ -17,7 +17,15 @@ const client = new line.Client(config);
 app.use(bodyParser.json());
 
 // ---------- Webhookエンドポイント ----------
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', async (req, res) => {app.post('/webhook', (req, res) => {
+  console.log("📩 受信イベント:", JSON.stringify(req.body, null, 2)); // ←追加！
+
+  Promise
+    .all(req.body.events.map(handleEvent))
+    .then((result) => res.json(result));
+});
+
+  
   try {
     const events = req.body.events;
     for (const event of events) {
