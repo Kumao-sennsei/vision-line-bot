@@ -27,6 +27,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 async function handleEvent(event) {
   if (event.type !== 'message') return null;
 
+  // ✅ 画像メッセージ対応
   if (event.message.type === 'image') {
     try {
       const stream = await client.getMessageContent(event.message.id);
@@ -38,15 +39,23 @@ async function handleEvent(event) {
       console.log('✅画像取得成功！サイズ:', buffer.length, 'bytes');
       console.log('✅Content-Type:', contentType);
 
+      // ✅ 会話対応くまお先生プロンプト
       const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
         {
-          model: 'gpt-4o', // ← 最新＆Vision対応モデル
+          model: 'gpt-4o',
           messages: [
             {
               role: 'user',
               content: [
-                { type: 'text', text: 'LaTeXなどは使わず、画像に写っている内容をやさしく丁寧に日本語で説明してください。分数や平方根などは記号でお願いします。' },
+                {
+                  type: 'text',
+                  text:
+                    'あなたは優しくて面白い数学の先生「くまお先生」です。' +
+                    '生徒が送ってきた画像の内容について、冗談を交えつつ明るく丁寧に、' +
+                    '親しみやすい会話形式で返してください。難しい専門用語は使わず、' +
+                    '中高生にもわかるように説明してください。',
+                },
                 {
                   type: 'image_url',
                   image_url: { url: imageUrl },
@@ -58,22 +67,22 @@ async function handleEvent(event) {
         },
         {
           headers: {
-            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
             'Content-Type': 'application/json',
           },
         }
       );
 
-      // ✅ LaTeX記法っぽい数式を整形！
-      let replyText = response.data.choices[0].message.content || '解析結果が見つかりませんでした。';
+      // ✅ LaTeXっぽい表記をLINE向けに整形
+      let replyText = response.data.choices[0].message.content || '画像の解析結果が見つかりませんでした。';
       replyText = replyText
-        .replace(/\\frac{(.*?)}{(.*?)}/g, '($1)/($2)') // \frac → (a)/(b)
-        .replace(/\\sqrt{(.*?)}/g, '√($1)')           // \sqrt → √
+        .replace(/\\frac{(.*?)}{(.*?)}/g, '($1)/($2)') // \frac{a}{b} → (a)/(b)
+        .replace(/\\sqrt{(.*?)}/g, '√($1)')           // \sqrt{a} → √(a)
         .replace(/\\pm/g, '±')                        // \pm → ±
         .replace(/\\\[|\\\]|\\\(|\\\)/g, '')          // \[ \] \( \) → 空文字
         .replace(/\^2/g, '²')                         // ^2 → ²
         .replace(/\^3/g, '³')                         // ^3 → ³
-        .replace(/\^([0-9])/g, '^$1');                // その他の ^n はそのまま
+        .replace(/\^([0-9])/g, '^$1');                // その他の ^n
 
       return client.replyMessage(event.replyToken, {
         type: 'text',
@@ -84,15 +93,16 @@ async function handleEvent(event) {
       console.error('❌ Visionエラー:', error.response?.data || error.message);
       return client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '画像の解析中にエラーが発生しました💥\nくまお先生、少し休憩中かも？',
+        text: '画像の解析中にエラーが出たよ💥\nくまお先生、ちょっと休憩中かも？',
       });
     }
   }
 
+  // ✅ テキストメッセージへの軽い返答（おまけ）
   if (event.message.type === 'text') {
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: `くまお先生です。「${event.message.text}」を受け取りました📩`,
+      text: `くまお先生です。「${event.message.text}」を受け取りました📩\n質問があれば画像も送ってね📸`,
     });
   }
 
