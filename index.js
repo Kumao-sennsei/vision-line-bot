@@ -1,103 +1,116 @@
 const express = require('express');
-const { middleware, Client } = require('@line/bot-sdk');
+const line = require('@line/bot-sdk');
 const axios = require('axios');
-const dotenv = require('dotenv');
-const getRawBody = require('raw-body');
-
-dotenv.config();
+require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET,
+  channelSecret: process.env.LINE_CHANNEL_SECRET
 };
 
-const client = new Client(config);
+const client = new line.Client(config);
 
-// Webhook
-app.post('/webhook', middleware(config), async (req, res) => {
+// Webhookエンドポイント
+app.post('/webhook', line.middleware(config), async (req, res) => {
   const events = req.body.events;
-  for (const event of events) {
-    if (event.type === 'message') {
-      if (event.message.type === 'image') {
-        const messageId = event.message.id;
-        const stream = await client.getMessageContent(messageId);
-        const buffer = await getRawBody(stream);
-
-        const base64Image = buffer.toString('base64');
-        const imageData = `data:image/jpeg;base64,${base64Image}`;
-
-        try {
-          const response = await axios.post(
-            'https://api.openai.com/v1/chat/completions',
-            {
-              model: 'gpt-4o',
-              messages: [
-                {
-                  role: 'system',
-                  content: 'あなたはやさしくて親しみやすい数学の先生「くまお先生」です。画像を送ってきた生徒に、やさしく会話しながら丁寧に数式の意味と解き方を説明してください。解答だけでなく考え方や注意点も大切に教えてあげてください。',
-                },
-                {
-                  role: 'user',
-                  content: [
-                    {
-                      type: 'image_url',
-                      image_url: { url: imageData },
-                    },
-                    {
-                      type: 'text',
-                      text: 'この問題の解き方と答えを教えてください。',
-                    },
-                  ],
-                },
-              ],
-              max_tokens: 1000,
-              temperature: 0.7,
-            },
-            {
-              headers: {
-                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json',
-              },
-            }
-          );
-
-          let replyText = response.data.choices[0].message.content;
-
-          // LaTeX変換を読みやすく整形
-          replyText = replyText
-            .replace(/\\frac{(.*?)}{(.*?)}/g, '($1)/($2)')
-            .replace(/\\sqrt{(.*?)}/g, '√($1)')
-            .replace(/\\pm/g, '±')
-            .replace(/\\[(){}[\]]/g, '')
-            .replace(/\^2/g, '²')
-            .replace(/\^3/g, '³')
-            .replace(/\^/g, '^');
-
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `🧸くまお先生の回答だよ！\n\n${replyText}`,
-          });
-        } catch (error) {
-          console.error('❌ Visionエラー:', error?.response?.data || error.message);
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: 'くまお先生ちょっと休憩中かも…💤　もう一回だけ試してみてね📷✨',
-          });
-        }
-      } else {
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `🧸くまお先生だよ！画像で質問してくれたら、読み取ってわかりやすく解説するよ📸✨`,
-        });
-      }
-    }
-  }
-  res.status(200).end();
+  const results = await Promise.all(events.map(handleEvent));
+  res.json(results);
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ くまおBot起動中 🧸 ポート番号: ${PORT}`);
+// Vision API 送信・返信処理
+async function handleEvent(event) {
+  if (event.type !== 'message' || event.message.type !== 'image') {
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '画像を送ってください📷✨',
+    });
+  }
+
+  // 画像取得
+  const messageId = event.message.id;
+  const stream = await client.getMessageContent(messageId);
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  const buffer = Buffer.concat(chunks);
+
+  // base64エンコード
+  const base64Image = buffer.toString('base64');
+
+  // OpenAI APIへ送信（gpt-4o使用！）
+  try {
+    const response = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: '高校数学の先生のように、画像内の問題を解説しながら丁寧に教えてください。LaTeX記号は使ってもOKですが、式は人間が読む前提で整形してください。'
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image_url',
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64Image}`
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 1000,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    let replyText = response.data.choices[0].message.content;
+
+    // LaTeXっぽい記号を整形して読みやすく！
+    replyText = replyText
+      .replace(/\\frac{(.*?)}{(.*?)}/g, '($1)/($2)')
+      .replace(/\\sqrt{(.*?)}/g, '√($1)')
+      .replace(/\\pm/g, '±')
+      .replace(/\\times/g, '×')
+      .replace(/\\div/g, '÷')
+      .replace(/\\cdot/g, '・')
+      .replace(/\\left|\\right/g, '')
+      .replace(/\\begin{.*?}|\\end{.*?}/g, '')
+      .replace(/\\[(){}[\]]/g, '')
+      .replace(/\^2/g, '²')
+      .replace(/\^3/g, '³')
+      .replace(/\^/g, '^');
+
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: `🐻くまお先生の回答だよ♪\n\n${replyText}`,
+    });
+
+  } catch (error) {
+    console.error('❌ Visionエラー:', error.response?.data || error.message);
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: 'くまお先生だよ🐻 画像の処理中にエラーが発生したよ💦\nもう一度試してみてね！',
+    });
+  }
+}
+
+// ポート起動（Railway／Render両対応）
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`くまおBot起動中 🐻 ポート番号: ${port}`);
 });
