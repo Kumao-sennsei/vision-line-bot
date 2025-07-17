@@ -1,4 +1,4 @@
-// LINE Vision Bot（くまお先生）進化系：画像対応＋クイズ正誤応答＋やさしい再説明＋式整形完全対応＋会話対応
+// LINE Vision Bot（くまお先生）進化系：画像対応＋クイズ正誤応答＋やさしい再説明＋式整形完全対応＋会話対応（画像安定化）
 
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
@@ -73,7 +73,10 @@ app.post('/webhook', async (req, res) => {
           const chunks = [];
           for await (const chunk of stream) chunks.push(chunk);
           const buffer = Buffer.concat(chunks);
+
+          const mimeType = buffer[0] === 0x89 ? 'image/png' : 'image/jpeg';
           const base64Image = buffer.toString('base64');
+          const imageDataUrl = `data:${mimeType};base64,${base64Image}`;
 
           const response = await axios.post(
             'https://api.openai.com/v1/chat/completions',
@@ -84,7 +87,7 @@ app.post('/webhook', async (req, res) => {
                   role: 'user',
                   content: [
                     { type: 'text', text: 'この画像を日本語で解説して。数式は読みやすくしてね。' },
-                    { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Image}` } },
+                    { type: 'image_url', image_url: { url: imageDataUrl } },
                   ]
                 }
               ],
