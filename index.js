@@ -1,4 +1,4 @@
-// LINE Vision Bot（くまお先生）LaTeX変換＆Web検索モード付き！
+// LINE Vision Bot（くまお先生）LaTeX変換＆Web検索＆クイズ評価＆再解説対応！
 
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
@@ -19,21 +19,19 @@ const config = {
 const client = new Client(config);
 
 let lastExplanation = '';
+let lastQuizAnswer = '';
 
 function convertLatexToReadable(text) {
   return text
-    .replace(/\\frac\{(.*?)\}\{(.*?)\}/g, '$1/$2')
-    .replace(/\\times/g, '×')
-    .replace(/\\div/g, '÷')
+    .replace(/\frac\{(.*?)\}\{(.*?)\}/g, '$1/$2')
+    .replace(/\times|times/g, '×')
+    .replace(/\div/g, '÷')
+    .replace(/\cdot/g, '・')
+    .replace(/\sqrt\{(.*?)\}/g, '√($1)')
+    .replace(/\left\(|\right\)/g, '')
+    .replace(/[\[\]()]/g, '')
     .replace(/\^2/g, '²')
     .replace(/\^3/g, '³')
-    .replace(/\\sqrt\{(.*?)\}/g, '√($1)')
-    .replace(/\\cdot/g, '・')
-    .replace(/\\left\(|\\right\)/g, '')
-    .replace(/\\\[/g, '')
-    .replace(/\\\]/g, '')
-    .replace(/\\\(/g, '')
-    .replace(/\\\)/g, '')
     .replace(/\\/g, '')
     .replace(/\btimes\b/g, '×')
     .replace(/\bdiv\b/g, '÷');
@@ -55,7 +53,7 @@ app.post('/webhook', middleware(config), async (req, res) => {
             messages: [
               {
                 role: 'system',
-                content: `あなたは「くまお先生」という、やさしく丁寧に教える先生です。画像の問題に答えてください。すべて日本語で解説し、やさしい語り口でお願いします。LaTeXなどの難しい表現は使わず、誰にでも分かりやすく書いてください。`
+                content: `あなたは「くまお先生」です。やさしい日本語で解説をしてください。`
               },
               {
                 role: 'user',
@@ -78,41 +76,30 @@ app.post('/webhook', middleware(config), async (req, res) => {
 
           await client.replyMessage(event.replyToken, {
             type: 'text',
-            text: `🐻くまお先生の解説だよ♪\n\n${explanation.trim()}\n\n「確認テストお願い」って送ってくれたら、確認テストを出すよ♪`
+            text: `🐻くまお先生の解説だよ♪\n\n${explanation}\n\n「確認テストお願い」って送ってくれたら、確認テストを出すよ♪`
           });
 
         } catch (err) {
-          console.error('Vision処理エラー:', err.response?.data || err.message);
+          console.error('Visionエラー:', err);
           await client.replyMessage(event.replyToken, {
             type: 'text',
-            text: 'くまお先生ちょっと休憩中かも…💤 もう一度試してね！'
+            text: 'くまお先生ちょっと休憩中かも…💤'
           });
         }
-
       } else if (event.message.type === 'text') {
         const userMessage = event.message.text.trim();
 
         if (userMessage.includes('確認テスト')) {
           if (!lastExplanation) {
-            await client.replyMessage(event.replyToken, {
-              type: 'text',
-              text: 'まだ解説していないから、まずは問題を送ってね📸'
-            });
+            await client.replyMessage(event.replyToken, { type: 'text', text: 'まずは画像を送ってね！📸' });
             return;
           }
-
           try {
             const quizRes = await axios.post('https://api.openai.com/v1/chat/completions', {
               model: 'gpt-4o',
               messages: [
-                {
-                  role: 'system',
-                  content: `あなたは「くまお先生」という先生で、解説の内容をもとに生徒の理解を確認するための4択クイズを作成します。A〜Cと「ちょっと分からない」の選択肢でお願いします。LaTeXや\(\)などは使わず、普通の日本語表現でお願いします。`
-                },
-                {
-                  role: 'user',
-                  content: `${lastExplanation}\n\nこの説明に基づく理解度チェックの確認テスト（4択）を作ってください。`
-                }
+                { role: 'system', content: '以下の説明に基づいた理解確認の4択クイズを出し、正解の選択肢（A〜C）も明示してください。LaTeXは使わず普通の日本語で。' },
+                { role: 'user', content: `${lastExplanation}\n\nクイズ作って、正解も出力して` }
               ]
             }, {
               headers: {
@@ -121,41 +108,91 @@ app.post('/webhook', middleware(config), async (req, res) => {
               }
             });
 
-            const quizRaw = quizRes.data.choices[0].message.content;
-            const quizText = convertLatexToReadable(quizRaw);
+            const quizFullText = quizRes.data.choices[0].message.content;
+            const answerMatch = quizFullText.match(/正解[：:]\s*([ABCabc])/);
+            lastQuizAnswer = answerMatch ? answerMatch[1].toUpperCase() : '';
+
+            const quizText = convertLatexToReadable(
+              quizFullText.replace(/正解[：:].*/g, '').trim()
+            );
 
             await client.replyMessage(event.replyToken, {
               type: 'text',
-              text: `🎓確認テストだよ！\n\n${quizText.trim()}`
+              text: `🎓確認テストだよ！\n\n${quizText}`
             });
 
           } catch (err) {
-            console.error('クイズ生成エラー:', err.response?.data || err.message);
+            console.error('クイズ生成エラー:', err);
             await client.replyMessage(event.replyToken, {
               type: 'text',
-              text: 'くまお先生、確認テストの準備がまだできてないみたい💦'
+              text: 'くまお先生、確認テストでちょっと考え中かも💦'
             });
           }
+        } else if (lastQuizAnswer && /^[ABCabc]$/.test(userMessage)) {
+          const userAnswer = userMessage.toUpperCase();
+          const isCorrect = userAnswer === lastQuizAnswer;
+
+          if (isCorrect) {
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: '🌟正解だよ！すごいね♪ 次の問題もがんばろう！'
+            });
+          } else {
+            const reExplain = await axios.post('https://api.openai.com/v1/chat/completions', {
+              model: 'gpt-4o',
+              messages: [
+                { role: 'system', content: 'あなたはくまお先生です。生徒が不正解だったときに、さらにやさしく、丁寧にもう一度同じ内容を解説してください。' },
+                { role: 'user', content: lastExplanation }
+              ]
+            }, {
+              headers: {
+                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+              }
+            });
+
+            const reExplainText = convertLatexToReadable(reExplain.data.choices[0].message.content);
+
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: `😢残念、不正解だったよ。正解は ${lastQuizAnswer} だよ…\n\n🐻もう一度、くまお先生がやさしく説明するね：\n\n${reExplainText}`
+            });
+          }
+          lastQuizAnswer = '';
+
+        } else if (/ちょっと.*(わからない|わかんない)/.test(userMessage)) {
+          const reExplain = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: 'gpt-4o',
+            messages: [
+              { role: 'system', content: 'あなたはくまお先生です。生徒が分からないと言ったら、さらにやさしく、具体的な例を交えてもう一度丁寧に説明してください。' },
+              { role: 'user', content: lastExplanation }
+            ]
+          }, {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            }
+          });
+
+          const reExplainText = convertLatexToReadable(reExplain.data.choices[0].message.content);
+
+          await client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `🐻大丈夫！くまお先生がもう一度、ゆっくり説明するね：\n\n${reExplainText}`
+          });
         } else if (userMessage.startsWith('検索 ')) {
           const query = userMessage.replace(/^検索\s+/, '');
           await client.replyMessage(event.replyToken, {
             type: 'text',
-            text: `🔍ごめんね！くまお先生のWeb検索機能は現在準備中なんだ💦
-将来的には「検索 ${query}」って送るだけで、ネットで調べた内容も返せるようにする予定だよ♪`
+            text: `🔍ごめんね！くまお先生のWeb検索機能は現在準備中なんだ💦\n将来的には「検索 ${query}」でネット検索できるようになるよ♪`
           });
         } else {
           try {
             const response = await axios.post('https://api.openai.com/v1/chat/completions', {
               model: 'gpt-4o',
               messages: [
-                {
-                  role: 'system',
-                  content: `あなたは「くまお先生」という先生で、会話形式でやさしく丁寧に日本語で教えます。`
-                },
-                {
-                  role: 'user',
-                  content: userMessage
-                }
+                { role: 'system', content: 'あなたは「くまお先生」という先生で、やさしく日本語で説明します。' },
+                { role: 'user', content: userMessage }
               ]
             }, {
               headers: {
@@ -163,20 +200,17 @@ app.post('/webhook', middleware(config), async (req, res) => {
                 'Content-Type': 'application/json'
               }
             });
-
             const replyRaw = response.data.choices[0].message.content;
             const reply = convertLatexToReadable(replyRaw);
-
             await client.replyMessage(event.replyToken, {
               type: 'text',
-              text: `🐻くまお先生の返答だよ♪\n\n${reply.trim()}`
+              text: `🐻くまお先生の返答だよ♪\n\n${reply}`
             });
-
           } catch (err) {
-            console.error('テキスト処理エラー:', err.response?.data || err.message);
+            console.error('会話エラー:', err);
             await client.replyMessage(event.replyToken, {
               type: 'text',
-              text: 'くまお先生、考え中みたい💦 もう一度試してみてね！'
+              text: 'くまお先生、考え中みたい💦 もう一回送ってみてね！'
             });
           }
         }
