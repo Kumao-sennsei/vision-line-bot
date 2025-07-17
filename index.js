@@ -1,4 +1,4 @@
-// LINE Vision Bot（くまお先生）完全修正版：画像対応＋会話返信＋クイズ＋LaTeX整形＋やさしい再解説＋安定動作！
+// LINE Vision Bot（くまお先生）進化系：画像対応＋クイズ正誤応答＋やさしい再説明＋式整形完全対応
 
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
@@ -20,15 +20,16 @@ const client = new Client(config);
 
 let lastExplanation = '';
 let lastQuizAnswer = '';
+let lastQuizDetail = '';
 
 function convertLatexToReadable(text) {
   return text
-    .replace(/\\frac\{(.*?)\}\{(.*?)\}/g, '$1/$2')
-    .replace(/\\times|\btimes\b|\stimes|\*|\*\*/g, '×')
-    .replace(/\\div|\bdiv\b|\//g, '÷')
-    .replace(/\\cdot/g, '・')
-    .replace(/\\sqrt\{(.*?)\}/g, '√($1)')
-    .replace(/\\left\(|\\right\)/g, '')
+    .replace(/\frac\{(.*?)\}\{(.*?)\}/g, '$1/$2')
+    .replace(/\times|\btimes\b|\stimes|\*|\*\*/g, '×')
+    .replace(/\div|\bdiv\b|\//g, '÷')
+    .replace(/\cdot/g, '・')
+    .replace(/\sqrt\{(.*?)\}/g, '√($1)')
+    .replace(/\left\(|\right\)/g, '')
     .replace(/[\[\]()]/g, '')
     .replace(/\^2/g, '²')
     .replace(/\^3/g, '³')
@@ -52,7 +53,7 @@ function convertLatexToReadable(text) {
     .replace(/\bexp\b/g, 'exp')
     .replace(/\bapprox\b/g, '≈')
     .replace(/\bto\b/g, '→')
-    .replace(/\\begin\{.*?\}|\\end\{.*?\}/g, '')
+    .replace(/\begin\{.*?\}|\end\{.*?\}/g, '')
     .replace(/\$/g, '')
     .replace(/\\n/g, '\n');
 }
@@ -118,11 +119,9 @@ app.post('/webhook', async (req, res) => {
         if (['a', 'b', 'c', 'd'].includes(userText)) {
           let reply;
           if (userText === lastQuizAnswer.toLowerCase()) {
-            reply = '正解だよ！さすがくまお先生の生徒✨';
-          } else if (userText === 'd') {
-            reply = `そっか、ちょっとむずかしかったね！もう一度、くまお先生がやさしく説明するよ：\n\n${lastExplanation}`;
+            reply = `正解だよ！✨すごいね！\n\n${lastExplanation}`;
           } else {
-            reply = `うーん、ちょっとちがったみたい💦 もう一度、くまお先生がやさしく解説するね：\n\n${lastExplanation}`;
+            reply = `ちょっとちがったみたい💦\n\nもう一度くまお先生がやさしく解説するね：\n\n${lastQuizDetail}`;
           }
 
           await client.replyMessage(event.replyToken, {
@@ -130,7 +129,10 @@ app.post('/webhook', async (req, res) => {
             text: reply,
           });
         } else {
-          const prompt = `以下の内容に関する4択クイズ（A〜D）を1問作ってください。日本語でやさしく。最後に正解を教えてください。\n\n${userText}`;
+          const prompt = `以下の内容に関する4択クイズ（A〜D）を1問作ってください。日本語でやさしく、最後に「正解：A」などと記載し、そのあとに正解の理由や丁寧な解説もつけてください。
+
+${userText}`;
+
           try {
             const quizRes = await axios.post(
               'https://api.openai.com/v1/chat/completions',
@@ -139,7 +141,7 @@ app.post('/webhook', async (req, res) => {
                 messages: [
                   { role: 'user', content: prompt }
                 ],
-                max_tokens: 800,
+                max_tokens: 1000,
               },
               {
                 headers: {
@@ -153,7 +155,7 @@ app.post('/webhook', async (req, res) => {
             const parts = content.split(/正解[:：]\s?/);
             const quiz = parts[0].trim();
             lastQuizAnswer = (parts[1] || '').trim().charAt(0).toLowerCase();
-            lastExplanation = content;
+            lastQuizDetail = convertLatexToReadable(content);
 
             await client.replyMessage(event.replyToken, {
               type: 'text',
