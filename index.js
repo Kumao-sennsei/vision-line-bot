@@ -1,72 +1,102 @@
-// index.js（ルートに置くだけ / まるっと置換で OK）
-import 'dotenv/config';
-import express from 'express';
-import line from '@line/bot-sdk';
-import axios from 'axios';
+// index.js  ―  まるっとコピペ用 🐻
 
+const express = require('express');
+const line      = require('@line/bot-sdk');
+const { Configuration, OpenAIApi } = require('openai');
+
+// ── 環境変数 ─────────────────────────────────
+const {
+  LINE_CHANNEL_ACCESS_TOKEN,
+  LINE_CHANNEL_SECRET,
+  OPENAI_API_KEY,
+} = process.env;
+
+// ── LINE SDK 設定 ────────────────────────────
 const config = {
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret:      process.env.LINE_CHANNEL_SECRET,
+  channelAccessToken: LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret:      LINE_CHANNEL_SECRET,
 };
-
 const client = new line.Client(config);
-const app    = express();
 
-// 署名検証付き Webhook エンドポイント
-app.post('/webhook', line.middleware(config), async (req, res) => {
-  try {
-    await Promise.all(req.body.events.map(handleEvent));
-    res.status(200).end();
-  } catch (e) {
-    console.error(e);
-    res.status(500).end();
-  }
-});
+// ── Express ───────────────────────────────────
+const app = express();
+app.use(express.json());
 
-// イベントごとのハンドラ
+// ── くまお先生のテキスト返信 ───────────────────
+const kumaoReply = (text) =>
+  `🐻 くまお先生だよ！\n「${text}」って言ったんだね。\nうんうん、なるほど〜！今日もいっしょにがんばろうね♪`;
+
+// ── Webhook ───────────────────────────────────
+app.post(
+  '/webhook',
+  line.middleware(config),
+  (req, res) => {
+    Promise.all(req.body.events.map(handleEvent))
+      .then((result) => res.json(result))
+      .catch((err) => {
+        console.error(err);
+        res.status(500).end();
+      });
+  },
+);
+
+// ── メインハンドラ ───────────────────────────
 async function handleEvent(event) {
   if (event.type !== 'message') return;
 
-  const { message } = event;
-
-  // --- ① テキスト ----------------------------
-  if (message.type === 'text') {
+  // ―― テキスト ――――――――――――――――――――――――――
+  if (event.message.type === 'text') {
     return client.replyMessage(event.replyToken, {
-      type : 'text',
-      text : `Echo: ${message.text}`,
+      type: 'text',
+      text: kumaoReply(event.message.text.trim()),
     });
   }
 
-  // --- ② 画像 -------------------------------
-  if (message.type === 'image') {
+  // ―― 画像 ――――――――――――――――――――――――――――
+  if (event.message.type === 'image') {
     try {
-      // 元画像バイナリを取得
-      const stream  = await client.getMessageContent(message.id);
-      const chunks  = [];
-      for await (const chunk of stream) chunks.push(chunk);
-      const buffer  = Buffer.concat(chunks);
+      // 1) LINE から画像取得
+      const stream = await client.getMessageContent(event.message.id);
+      const chunks = [];
+      stream.on('data', (c) => chunks.push(c));
+      await new Promise((rs, rj) => {
+        stream.on('end', rs);
+        stream.on('error', rj);
+      });
+      const buffer = Buffer.concat(chunks);
 
-      // ★ここで外部 API に buffer を送る、または簡易判定だけ返す例
-      // 今回はサイズを返すだけのダミー
-      const info = `画像を受信しました！サイズ: ${buffer.length} byte`;
+      // 2) OpenAI Vision へ送信
+      const openai = new OpenAIApi(new Configuration({ apiKey: OPENAI_API_KEY }));
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-vision-preview',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: `data:image/jpeg;base64,${buffer.toString('base64')}` },
+              { type: 'text',      text: 'この画像を日本語で簡単に説明してください。' },
+            ],
+          },
+        ],
+      });
 
-      return client.replyMessage(event.replyToken, { type: 'text', text: info });
-    } catch (err) {
-      console.error('Image handle error:', err);
+      const aiText = completion.choices[0].message.content.trim();
       return client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '画像の解析に失敗しました🙏',
+        text: `🐻 くまお先生の画像説明だよ！\n${aiText}`,
+      });
+    } catch (err) {
+      console.error(err);
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '🐻 くまお先生だよ！画像の解析に失敗しちゃった、ごめんね💦',
       });
     }
   }
-
-  // 他メッセージタイプ
-  return client.replyMessage(event.replyToken, {
-    type: 'text',
-    text: 'テキストか画像を送ってね！',
-  });
 }
 
-// --------------------------------------------
+// ── 起動 ─────────────────────────────────────
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log(`Bot on ${port}`));
+
+module.exports = app;
