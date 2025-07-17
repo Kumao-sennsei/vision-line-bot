@@ -1,16 +1,9 @@
 {
   "name": "vision-line-bot",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "index.js",           ← ✅ この行OK
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js"   ← ✅ これを絶対に書く！
   },
-  "dependencies": {
-    "@line/bot-sdk": "^7.5.1",
-    "axios": "^1.6.8",
-    "dotenv": "^16.3.1",
-    "express": "^4.19.2",
-    "raw-body": "^2.5.2"
-    "cloudinary": "^1.37.2"
-  }
+  ...
 }
