@@ -3,6 +3,9 @@ name: Generate Lockfile and Commit
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write  # ← これが重要！！！
+
 jobs:
   generate-lockfile:
     runs-on: ubuntu-latest
