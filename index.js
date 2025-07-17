@@ -1,4 +1,4 @@
-// LINE Vision Bot（くまお先生）最終進化：解説＋4択クイズ付き！
+// LINE Vision Bot（くまお先生）最終進化：解説＋4択クイズ付き！（※確認テストは生徒が「確認テストお願い」と言ったときだけ出題）
 
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
@@ -18,6 +18,8 @@ const config = {
 
 const client = new Client(config);
 
+let lastExplanation = ''; // 🔸 解説を一時保存（テスト生成用）
+
 app.post('/webhook', middleware(config), async (req, res) => {
   const events = req.body.events;
   for (const event of events) {
@@ -29,7 +31,6 @@ app.post('/webhook', middleware(config), async (req, res) => {
         const base64Image = buffer.toString('base64');
 
         try {
-          // ① 解説取得
           const explanationRes = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: 'gpt-4o',
             messages: [
@@ -53,39 +54,11 @@ app.post('/webhook', middleware(config), async (req, res) => {
           });
 
           const explanation = explanationRes.data.choices[0].message.content;
+          lastExplanation = explanation; // 🔸 保存しておく
 
-          // ② 確認テスト生成
-          const quizRes = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: 'gpt-4o',
-            messages: [
-              {
-                role: 'system',
-                content: `あなたは「くまお先生」という先生で、解説の内容をもとに生徒の理解を確認するための4択クイズを作成します。A〜Cと「ちょっと分からない」の選択肢でお願いします。`
-              },
-              {
-                role: 'user',
-                content: `${explanation}\n\nこの説明に基づく理解度チェックの確認テスト（4択）を作ってください。`
-              }
-            ]
-          }, {
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
-            }
-          });
-
-          const quizText = quizRes.data.choices[0].message.content;
-
-          // ③ LINE返信：解説
           await client.replyMessage(event.replyToken, {
             type: 'text',
-            text: `🐻くまお先生の解説だよ♪\n\n${explanation.trim()}`
-          });
-
-          // ④ LINE返信：確認テスト
-          await client.pushMessage(event.source.userId, {
-            type: 'text',
-            text: `🎓確認テストだよ！\n\n${quizText.trim()}`
+            text: `🐻くまお先生の解説だよ♪\n\n${explanation.trim()}\n\n「確認テストお願い」って送ってくれたら、確認テストを出すよ♪`
           });
 
         } catch (err) {
@@ -97,39 +70,85 @@ app.post('/webhook', middleware(config), async (req, res) => {
         }
 
       } else if (event.message.type === 'text') {
-        const userMessage = event.message.text;
-        try {
-          const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: 'gpt-4o',
-            messages: [
-              {
-                role: 'system',
-                content: `あなたは「くまお先生」という先生で、会話形式でやさしく丁寧に日本語で教えます。`
-              },
-              {
-                role: 'user',
-                content: userMessage
+        const userMessage = event.message.text.trim();
+
+        if (userMessage.includes('確認テスト')) {
+          if (!lastExplanation) {
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: 'まだ解説していないから、まずは問題を送ってね📸'
+            });
+            return;
+          }
+
+          try {
+            const quizRes = await axios.post('https://api.openai.com/v1/chat/completions', {
+              model: 'gpt-4o',
+              messages: [
+                {
+                  role: 'system',
+                  content: `あなたは「くまお先生」という先生で、解説の内容をもとに生徒の理解を確認するための4択クイズを作成します。A〜Cと「ちょっと分からない」の選択肢でお願いします。`
+                },
+                {
+                  role: 'user',
+                  content: `${lastExplanation}\n\nこの説明に基づく理解度チェックの確認テスト（4択）を作ってください。`
+                }
+              ]
+            }, {
+              headers: {
+                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
               }
-            ]
-          }, {
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
-            }
-          });
+            });
 
-          const reply = response.data.choices[0].message.content;
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `🐻くまお先生の返答だよ♪\n\n${reply.trim()}`
-          });
+            const quizText = quizRes.data.choices[0].message.content;
 
-        } catch (err) {
-          console.error('テキスト処理エラー:', err.response?.data || err.message);
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: 'くまお先生、考え中みたい💦 もう一度試してみてね！'
-          });
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: `🎓確認テストだよ！\n\n${quizText.trim()}`
+            });
+
+          } catch (err) {
+            console.error('クイズ生成エラー:', err.response?.data || err.message);
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: 'くまお先生、確認テストの準備がまだできてないみたい💦'
+            });
+          }
+        } else {
+          try {
+            const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+              model: 'gpt-4o',
+              messages: [
+                {
+                  role: 'system',
+                  content: `あなたは「くまお先生」という先生で、会話形式でやさしく丁寧に日本語で教えます。`
+                },
+                {
+                  role: 'user',
+                  content: userMessage
+                }
+              ]
+            }, {
+              headers: {
+                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+              }
+            });
+
+            const reply = response.data.choices[0].message.content;
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: `🐻くまお先生の返答だよ♪\n\n${reply.trim()}`
+            });
+
+          } catch (err) {
+            console.error('テキスト処理エラー:', err.response?.data || err.message);
+            await client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: 'くまお先生、考え中みたい💦 もう一度試してみてね！'
+            });
+          }
         }
       }
     }
