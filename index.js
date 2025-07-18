@@ -1,88 +1,92 @@
-// index.js
+// Load .env in development
 require('dotenv').config();
+
 const express = require('express');
 const { Client, middleware } = require('@line/bot-sdk');
-const { Configuration, OpenAIApi } = require('openai');
+const OpenAI = require('openai');
 const cloudinary = require('cloudinary').v2;
 
 const app = express();
 
-// ── 1) 環境変数 ───────────────────
+// LINE SDK 設定
 const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret:      process.env.LINE_CHANNEL_SECRET,
 };
-const openai = new OpenAIApi(new Configuration({
+const lineClient = new Client(lineConfig);
+
+// OpenAI SDK v4 設定
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-}));
+});
+
+// Cloudinary 設定
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key:    process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// ── 2) LINE クライアント ─────────────
-const lineClient = new Client(lineConfig);
+// バッファを受け取ってアップロード → URL を返す
+function uploadImage(buffer) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { resource_type: 'image' },
+      (err, result) => err ? reject(err) : resolve(result)
+    );
+    stream.end(buffer);
+  });
+}
 
-// ── 3) Webhook エンドポイント ────────
+// Webhook エンドポイント
 app.post('/webhook', middleware(lineConfig), async (req, res) => {
-  console.log('▶ /webhook', JSON.stringify(req.body));
-
   try {
-    const tasks = req.body.events.map(async (ev) => {
-      // テキストメッセージ
+    // すべてのイベントに非同期対応で返信
+    await Promise.all(req.body.events.map(async (ev) => {
+      // テキストメッセージを要約＆解説
       if (ev.type === 'message' && ev.message.type === 'text') {
         const userText = ev.message.text;
-
-        // OpenAI に送って要約＆解説
-        const aiRes = await openai.createChatCompletion({
+        const ai = await openai.chat.completions.create({
           model: 'gpt-4o-mini',
           messages: [
             { role: 'system', content: 'あなたは優しくて面白い「くまお先生」です。' },
-            { role: 'user', content: `次の文章を自然な会話調で要約＆解説してください:\n\n${userText}` },
+            { role: 'user',   content: `次の文章を自然に要約＆解説してください:\n\n${userText}` },
           ],
         });
-        const replyText = aiRes.data.choices[0].message.content;
-
+        const reply = ai.choices[0].message.content;
         return lineClient.replyMessage(ev.replyToken, {
           type: 'text',
-          text: replyText,
+          text: reply,
         });
       }
 
-      // 画像メッセージ
+      // 画像メッセージ → Cloudinary にアップ → URL 返却
       if (ev.type === 'message' && ev.message.type === 'image') {
-        // まずは LINE からバイナリ取得
         const stream = await lineClient.getMessageContent(ev.message.id);
-        const buffers = [];
-        for await (const chunk of stream) buffers.push(chunk);
-        const imageBuffer = Buffer.concat(buffers);
-
-        // Cloudinary にアップ
-        const uploadRes = await cloudinary.uploader.upload_stream({ resource_type: 'image' }, (err, out) => {
-          if (err) throw err;
-          return out;
-        }).end(imageBuffer);
-
-        // URL を返すだけ（解析は後日）
+        const bufs = [];
+        for await (const chunk of stream) bufs.push(chunk);
+        const buffer = Buffer.concat(bufs);
+        const upRes = await uploadImage(buffer);
         return lineClient.replyMessage(ev.replyToken, {
           type: 'text',
-          text: `画像を受け取りました！こちらから見られますよ → ${uploadRes.secure_url}`,
+          text: `画像アップ成功しました！\n${upRes.secure_url}`,
         });
       }
 
-      // それ以外は何もしない
-    });
+      // その他のイベントは無視
+      return Promise.resolve();
+    }));
 
-    await Promise.all(tasks);
+    // LINE プラットフォーム向けに 200 応答
     res.status(200).end();
-
-  } catch (err) {
-    console.error('❌ Error in handler:', err);
+  } catch (e) {
+    console.error(e);
     res.status(500).end();
   }
 });
 
-// ── 4) サーバ起動 ───────────────────
+// サーバ起動
 const port = process.env.PORT || 8080;
-app.listen(port, () => console.log(`🚀 Listening on ${port}`));
+app.listen(port, () => {
+  console.log(`Listening on ${port}`);
+});
