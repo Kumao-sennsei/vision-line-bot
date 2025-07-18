@@ -1,39 +1,35 @@
-require("dotenv").config();
-const express = require("express");
-const line = require("@line/bot-sdk");
+const express = require('express');
+const line = require('@line/bot-sdk');
+require('dotenv').config();
 
 const config = {
-  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.CHANNEL_SECRET,
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET
 };
 
 const app = express();
-const client = new line.Client(config);
+const PORT = process.env.PORT || 3000;
 
-app.post("/webhook", line.middleware(config), (req, res) => {
-  Promise.all(req.body.events.map(handleEvent))
-    .then((result) => res.json(result))
-    .catch((err) => {
-      console.error("エラー発生:", err);
-      res.status(500).end();
-    });
+app.post('/webhook', line.middleware(config), (req, res) => {
+  Promise
+    .all(req.body.events.map(handleEvent))
+    .then((result) => res.json(result));
 });
 
+const client = new line.Client(config);
+
 function handleEvent(event) {
-  if (event.type !== "message" || event.message.type !== "text") {
+  if (event.type !== 'message' || event.message.type !== 'text') {
     return Promise.resolve(null);
   }
 
-  const userMessage = event.message.text;
-  const replyMessage = `くまお先生：『${userMessage}』って言ってたね！今日も元気だしていこう！🐻✨`;
-
+  const replyText = `くまお先生だよ！「${event.message.text}」って言ったね、かわいいね(●´ω｀●)`;
   return client.replyMessage(event.replyToken, {
-    type: "text",
-    text: replyMessage,
+    type: 'text',
+    text: replyText
   });
 }
 
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Listening on port ${PORT}`);
+  console.log(`くまお先生サーバーが起動しました🚀 ポート: ${PORT}`);
 });
