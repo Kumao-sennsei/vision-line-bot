@@ -1,4 +1,4 @@
-// index.js
+// ✅くまお先生 LINE Bot：index.js（貼るだけ完成版）
 require('dotenv').config();
 const express = require('express');
 const line = require('@line/bot-sdk');
@@ -24,7 +24,7 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
     const results = await Promise.all(events.map(handleEvent));
     res.json(results);
   } catch (err) {
-    console.error('エラー発生:', err);
+    console.error('Webhookエラー:', err);
     res.status(500).end();
   }
 });
@@ -36,7 +36,7 @@ async function handleEvent(event) {
 
   const userMessage = event.message.text;
 
-  const prompt = `生徒からの質問です：「${userMessage}」\nこの質問に対して、優しくて面白いくまお先生として、自然な会話で答えてください。要約＋解説も含めて、わかりやすくお願いします。`;
+  const prompt = `生徒からの質問：「${userMessage}」\nこの質問に、くまお先生としてやさしく、ユーモアも交えて、要約＋解説してください。`; // くまお先生の口調に指示
 
   try {
     const completion = await openai.createChatCompletion({
@@ -45,16 +45,19 @@ async function handleEvent(event) {
     });
 
     const replyText = completion.data.choices[0].message.content;
-    return client.replyMessage(event.replyToken, { type: 'text', text: replyText });
-  } catch (err) {
-    console.error('OpenAIエラー:', err);
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: 'ごめんね、くまお先生ちょっと混乱中かも…また聞いてね！',
+      text: replyText,
+    });
+  } catch (err) {
+    console.error('OpenAI応答エラー:', err);
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: 'くまお先生ちょっと混乱中…またすぐ復活するね！',
     });
   }
 }
 
 app.listen(port, () => {
-  console.log(`サーバー起動中ポート: ${port}`);
+  console.log(`くまお先生サーバー起動中！ポート: ${port}`);
 });
