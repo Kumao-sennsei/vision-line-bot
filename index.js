@@ -1,4 +1,4 @@
-// Load .env in development
+// Load .env
 require('dotenv').config();
 
 const express = require('express');
@@ -15,10 +15,8 @@ const lineConfig = {
 };
 const lineClient = new Client(lineConfig);
 
-// OpenAI SDK v4 設定
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// OpenAI v4 設定
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Cloudinary 設定
 cloudinary.config({
@@ -27,66 +25,54 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// バッファを受け取ってアップロード → URL を返す
-function uploadImage(buffer) {
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      { resource_type: 'image' },
-      (err, result) => err ? reject(err) : resolve(result)
-    );
-    stream.end(buffer);
-  });
+async function handleEvent(ev) {
+  try {
+    if (ev.type === 'message' && ev.message.type === 'text') {
+      const userText = ev.message.text;
+      const ai = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'あなたは優しくて面白い「くまお先生」です。' },
+          { role: 'user',   content: `次の文章を自然に要約＆解説してください:\n\n${userText}` },
+        ],
+      });
+      const reply = ai.choices[0].message.content;
+      await lineClient.replyMessage(ev.replyToken, { type:'text', text: reply });
+    }
+    else if (ev.type === 'message' && ev.message.type === 'image') {
+      // 画像 → Cloudinary
+      const stream = await lineClient.getMessageContent(ev.message.id);
+      const bufs = [];
+      for await (const chunk of stream) bufs.push(chunk);
+      const buffer = Buffer.concat(bufs);
+      const up = await new Promise((res, rej) => {
+        cloudinary.uploader.upload_stream({ resource_type:'image' }, (e,r)=> e?rej(e):res(r)).end(buffer);
+      });
+      await lineClient.replyMessage(ev.replyToken, {
+        type:'text',
+        text:`画像アップ成功！\n${up.secure_url}`
+      });
+    }
+    // それ以外は無視
+  } catch (e) {
+    console.error('Event error:', e);
+  }
 }
 
-// Webhook エンドポイント
-app.post('/webhook', middleware(lineConfig), async (req, res) => {
-  try {
-    // すべてのイベントに非同期対応で返信
-    await Promise.all(req.body.events.map(async (ev) => {
-      // テキストメッセージを要約＆解説
-      if (ev.type === 'message' && ev.message.type === 'text') {
-        const userText = ev.message.text;
-        const ai = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: 'あなたは優しくて面白い「くまお先生」です。' },
-            { role: 'user',   content: `次の文章を自然に要約＆解説してください:\n\n${userText}` },
-          ],
-        });
-        const reply = ai.choices[0].message.content;
-        return lineClient.replyMessage(ev.replyToken, {
-          type: 'text',
-          text: reply,
-        });
-      }
+app.post('/webhook', middleware(lineConfig), (req, res) => {
+  // ① まず即レスポンス
+  res.sendStatus(200);
 
-      // 画像メッセージ → Cloudinary にアップ → URL 返却
-      if (ev.type === 'message' && ev.message.type === 'image') {
-        const stream = await lineClient.getMessageContent(ev.message.id);
-        const bufs = [];
-        for await (const chunk of stream) bufs.push(chunk);
-        const buffer = Buffer.concat(bufs);
-        const upRes = await uploadImage(buffer);
-        return lineClient.replyMessage(ev.replyToken, {
-          type: 'text',
-          text: `画像アップ成功しました！\n${upRes.secure_url}`,
-        });
-      }
-
-      // その他のイベントは無視
-      return Promise.resolve();
-    }));
-
-    // LINE プラットフォーム向けに 200 応答
-    res.status(200).end();
-  } catch (e) {
-    console.error(e);
-    res.status(500).end();
-  }
+  // ② バックグラウンドでイベントを処理
+  (req.body.events || []).forEach(ev => {
+    handleEvent(ev);
+  });
 });
 
-// サーバ起動
-const port = process.env.PORT || 8080;
-app.listen(port, () => {
-  console.log(`Listening on ${port}`);
+// 簡易ヘルスチェック
+app.get('/', (_req, res) => res.send('OK'));
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`Listening on ${PORT}`);
 });
