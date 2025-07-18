@@ -1,6 +1,8 @@
 // index.js
 const express = require('express');
 const line = require('@line/bot-sdk');
+const cloudinary = require('cloudinary').v2;
+const { Configuration, OpenAIApi } = require('openai');
 const app = express();
 
 // Railway対応：環境変数PORTまたは8080
@@ -12,6 +14,18 @@ const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 };
 const client = new line.Client(config);
+
+// Cloudinary設定
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// OpenAI設定
+const openai = new OpenAIApi(
+  new Configuration({ apiKey: process.env.OPENAI_API_KEY })
+);
 
 // JSONパース
 app.use(express.json());
@@ -45,13 +59,30 @@ async function handleEvent(event) {
     for await (let chunk of stream) chunks.push(chunk);
     const buffer = Buffer.concat(chunks);
 
-    // 3) 画像解析（実装に合わせて置き換え）
-    const result = await someImageProcessingFunction(buffer);
+    // 3) Cloudinary にアップロード＆OCR（OpenAI にURLを渡す）
+    const uploadResult = await new Promise((resolve, reject) => {
+      const uploader = cloudinary.uploader.upload_stream(
+        { resource_type: 'image' },
+        (error, result) => error ? reject(error) : resolve(result)
+      );
+      uploader.end(buffer);
+    });
+    const imageUrl = uploadResult.secure_url;
 
-    // 4) 解析結果を pushMessage で返信
+    // 4) OpenAI に画像URLを投げて解析
+    const chat = await openai.createChatCompletion({
+      model: 'gpt-4o-mini', // Vision対応モデルを指定
+      messages: [
+        { role: 'system', content: 'この画像を説明してください。' },
+        { role: 'user', content: imageUrl }
+      ]
+    });
+    const description = chat.data.choices[0].message.content.trim();
+
+    // 5) 解析結果を pushMessage で返信
     return client.pushMessage(event.source.userId, {
       type: 'text',
-      text: `解析結果: ${result.text || JSON.stringify(result)}`,
+      text: `解析結果: ${description}`,
     });
   }
 
@@ -65,12 +96,6 @@ async function handleEvent(event) {
 
   // その他は無視
   return Promise.resolve(null);
-}
-
-// 画像解析のダミー関数（実際の処理に置き換えてください）
-async function someImageProcessingFunction(buffer) {
-  // Cloudinary OCR／OpenAI Visionなど
-  return { text: 'ダミー解析結果' };
 }
 
 // サーバ起動
