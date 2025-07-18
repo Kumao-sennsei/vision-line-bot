@@ -1,11 +1,11 @@
-// Load .env
+// 必要モジュールの読み込み
 require('dotenv').config();
-
 const express = require('express');
 const { Client, middleware } = require('@line/bot-sdk');
 const OpenAI = require('openai');
 const cloudinary = require('cloudinary').v2;
 
+// Express アプリ作成
 const app = express();
 
 // LINE SDK 設定
@@ -15,7 +15,7 @@ const lineConfig = {
 };
 const lineClient = new Client(lineConfig);
 
-// OpenAI v4 設定
+// OpenAI 設定（gpt-4o-mini を利用）
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Cloudinary 設定
@@ -25,42 +25,59 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-async function handleEvent(ev) {
+// イベントごとの処理
+async function handleEvent(event) {
   try {
-    if (ev.type === 'message' && ev.message.type === 'text') {
-      const userText = ev.message.text;
-      const ai = await openai.chat.completions.create({
+    // テキストメッセージへの対応
+    if (event.type === 'message' && event.message.type === 'text') {
+      const userText = event.message.text;
+
+      // ChatGPT に送信
+      const completion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
-          { role: 'system', content: 'あなたは優しくて面白い「くまお先生」です。' },
-          { role: 'user',   content: `次の文章を自然に要約＆解説してください:\n\n${userText}` },
-        ],
+          { role: 'system', content: 'あなたは「くまお先生」。なんでも優しく面白く、自然に会話する先生です。' },
+          { role: 'user',   content: `以下のユーザーの質問を、親しみやすく要約しつつ自然な会話調で解説してください。\n\n${userText}` }
+        ]
       });
-      const reply = ai.choices[0].message.content;
-      await lineClient.replyMessage(ev.replyToken, { type:'text', text: reply });
+
+      const replyText = completion.choices[0].message.content;
+      await lineClient.replyMessage(event.replyToken, {
+        type: 'text',
+        text: replyText
+      });
     }
-    else if (ev.type === 'message' && ev.message.type === 'image') {
-      // 画像 → Cloudinary
-      const stream = await lineClient.getMessageContent(ev.message.id);
+
+    // 画像メッセージへの対応
+    else if (event.type === 'message' && event.message.type === 'image') {
+      const stream = await lineClient.getMessageContent(event.message.id);
       const bufs = [];
       for await (const chunk of stream) bufs.push(chunk);
       const buffer = Buffer.concat(bufs);
-      const up = await new Promise((res, rej) => {
-        cloudinary.uploader.upload_stream({ resource_type:'image' }, (e,r)=> e?rej(e):res(r)).end(buffer);
+
+      // Cloudinary にアップロード
+      const uploadResult = await new Promise((res, rej) => {
+        cloudinary.uploader.upload_stream(
+          { resource_type: 'image' },
+          (err, result) => err ? rej(err) : res(result)
+        ).end(buffer);
       });
-      await lineClient.replyMessage(ev.replyToken, {
-        type:'text',
-        text:`画像アップ成功！\n${up.secure_url}`
+
+      await lineClient.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `📸 画像のアップロードに成功しました！\n${uploadResult.secure_url}`
       });
     }
-    // それ以外は無視
-  } catch (e) {
-    console.error('Event error:', e);
+
+    // その他イベントは無視
+  } catch (err) {
+    console.error('Event handling error:', err);
   }
 }
 
+// Webhook エンドポイント
 app.post('/webhook', middleware(lineConfig), (req, res) => {
-  // ① まず即レスポンス
+  // ① すぐに 200 OK を返す
   res.sendStatus(200);
 
   // ② バックグラウンドでイベントを処理
@@ -69,10 +86,13 @@ app.post('/webhook', middleware(lineConfig), (req, res) => {
   });
 });
 
-// 簡易ヘルスチェック
-app.get('/', (_req, res) => res.send('OK'));
+// ヘルスチェック用
+app.get('/', (_req, res) => {
+  res.send('くまお先生 BOT が稼働中です！');
+});
 
+// サーバ起動
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`Listening on ${PORT}`);
+  console.log(`Listening on port ${PORT}`);
 });
