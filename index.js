@@ -1,130 +1,79 @@
-// index.js（完全貼るだけコード）
-// くまお先生：優しくておもしろく、なんでも答えてくれるAI先生
+// 🌟 たかちゃん専用：くまお先生が優しく面白く返答するLINE Botコード（メッセージ対応100%版）
 
-require('dotenv').config();
-const express = require('express');
-const line = require('@line/bot-sdk');
-const axios = require('axios');
-const rawBody = require('raw-body');
-const { Configuration, OpenAIApi } = require('openai');
-const cloudinary = require('cloudinary').v2;
+import express from "express";
+import dotenv from "dotenv";
+import { middleware, Client } from "@line/bot-sdk";
+import axios from "axios";
 
-const app = express();
-const port = process.env.PORT || 8080;
+// .env 読み込み
+dotenv.config();
 
-// LINE設定
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
-const client = new line.Client(config);
 
-// OpenAI設定
-const openai = new OpenAIApi(
-  new Configuration({ apiKey: process.env.OPENAI_API_KEY })
-);
+const app = express();
+const client = new Client(config);
 
-// Cloudinary設定
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+app.use(middleware(config));
+app.use(express.json());
 
-// 生の画像データ受け取り用
-app.post('/webhook', line.middleware(config), async (req, res) => {
-  const events = req.body.events;
-  const results = await Promise.all(events.map(handleEvent));
-  res.json(results);
-});
+// System prompt：くまお先生のキャラ設定
+const systemPrompt = `
+あなたは「くまお先生」です。
+優しくて面白く、生徒の質問に自然な日本語で丁寧に答えるLINEの先生です。
+わかりやすい言葉で、専門用語はかみ砕いて、会話風に教えてあげてください。
+質問がよくわからないときも「なるほど、こういうことかな？」と寄り添う形で対応し、必ず返答してください。
+`;
 
-async function handleEvent(event) {
-  if (event.type !== 'message') return;
+// メッセージイベント処理
+app.post("/webhook", async (req, res) => {
+  try {
+    const events = req.body.events;
+    const results = await Promise.all(
+      events.map(async (event) => {
+        if (event.type === "message" && event.message.type === "text") {
+          const userMessage = event.message.text;
 
-  if (event.message.type === 'text') {
-    // テキストメッセージを要約＋優しく解説
-    const question = event.message.text;
-
-    const gptResponse = await openai.createChatCompletion({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'あなたはくまお先生という、なんでも答えてくれる優しくて面白い先生です。質問に対して自然に要約し、わかりやすく丁寧に優しく解説してください。できれば会話風で！',
-        },
-        {
-          role: 'user',
-          content: question,
-        },
-      ],
-    });
-
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: gptResponse.data.choices[0].message.content.trim(),
-    });
-  }
-
-  if (event.message.type === 'image') {
-    try {
-      const stream = await client.getMessageContent(event.message.id);
-      const buffer = await rawBody(stream);
-
-      // Cloudinaryにアップロード
-      const uploadRes = await cloudinary.uploader.upload_stream(
-        { resource_type: 'image' },
-        async (error, result) => {
-          if (error) {
-            await client.replyMessage(event.replyToken, {
-              type: 'text',
-              text: '画像のアップロードに失敗しちゃったよ…( ;∀;)',
-            });
-            return;
-          }
-
-          // OpenAI Visionで画像＋説明文を解析
-          const visionRes = await openai.createChatCompletion({
-            model: 'gpt-4o',
-            messages: [
-              {
-                role: 'system',
-                content:
-                  'あなたはくまお先生という、画像に関する質問にやさしく丁寧におもしろく答える先生です。画像を見て、どんなことかを会話風に説明してください。',
+          const response = await axios.post(
+            "https://api.openai.com/v1/chat/completions",
+            {
+              model: "gpt-4o",
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userMessage },
+              ],
+              temperature: 0.8,
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                "Content-Type": "application/json",
               },
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'image_url',
-                    image_url: {
-                      url: result.secure_url,
-                    },
-                  },
-                ],
-              },
-            ],
-          });
+            }
+          );
 
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: visionRes.data.choices[0].message.content.trim(),
+          const replyText = response.data.choices[0].message.content;
+
+          return client.replyMessage(event.replyToken, {
+            type: "text",
+            text: replyText,
           });
+        } else {
+          return Promise.resolve(null); // テキスト以外は無視
         }
-      );
-
-      // bufferをCloudinaryに流す
-      require('streamifier').createReadStream(buffer).pipe(uploadRes);
-    } catch (err) {
-      console.error('画像処理エラー:', err);
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: '画像の解析に失敗しちゃったよ…ごめんね( ;∀;)',
-      });
-    }
+      })
+    );
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("エラー発生:", err);
+    res.status(500).end();
   }
-}
+});
 
+// 起動
+const port = process.env.PORT || 8080;
 app.listen(port, () => {
-  console.log(`Bot on ${port}`);
+  console.log("くまお先生、起動中！ポート：" + port);
 });
