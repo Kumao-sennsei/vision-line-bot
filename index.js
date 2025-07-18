@@ -6,7 +6,7 @@ const app = express();
 // Railway対応：環境変数PORTまたは8080
 const PORT = process.env.PORT || 8080;
 
-// LINE SDK用設定（Environment Variablesから自動取得）
+// LINE SDK設定
 const config = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -45,11 +45,11 @@ async function handleEvent(event) {
     for await (let chunk of stream) chunks.push(chunk);
     const buffer = Buffer.concat(chunks);
 
-    // 3) 画像解析（あなたの実装に合わせて書き換え）
+    // 3) 画像解析（実装に合わせて置き換え）
     const result = await someImageProcessingFunction(buffer);
 
-    // 4) 解析結果を返信
-    return client.replyMessage(event.replyToken, {
+    // 4) 解析結果を pushMessage で返信
+    return client.pushMessage(event.source.userId, {
       type: 'text',
       text: `解析結果: ${result.text || JSON.stringify(result)}`,
     });
@@ -67,10 +67,9 @@ async function handleEvent(event) {
   return Promise.resolve(null);
 }
 
-// (例) 画像解析関数のダミー実装
+// 画像解析のダミー関数（実際の処理に置き換えてください）
 async function someImageProcessingFunction(buffer) {
-  // ここを Cloudinary OCR や OpenAI Vision など
-  // 実際の処理に置き換えてください
+  // Cloudinary OCR／OpenAI Visionなど
   return { text: 'ダミー解析結果' };
 }
 
