@@ -1,102 +1,94 @@
-import express from 'express';
-import dotenv from 'dotenv';
-import axios from 'axios';
-import line from '@line/bot-sdk';
-import { config as cloudinaryConfig, uploader } from 'cloudinary';
-import getRawBody from 'raw-body';
+require('dotenv').config();
+const express = require('express');
+const { Client, middleware } = require('@line/bot-sdk');
+const { Configuration, OpenAIApi } = require('openai');
+const cloudinary = require('cloudinary').v2;
 
-dotenv.config();
+// LINE SDK 設定
+const lineConfig = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
+};
+const client = new Client(lineConfig);
 
-cloudinaryConfig({
+// OpenAI 設定
+const openaiConfig = new Configuration({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAIApi(openaiConfig);
+
+// Cloudinary 設定
+cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
 const app = express();
-app.use('/webhook', line.middleware({
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
-}));
+const PORT = process.env.PORT || 8080;
 
-const client = new line.Client({
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
-});
-
-app.post('/webhook', async (req, res) => {
+// Webhook エンドポイント
+app.post('/webhook', middleware(lineConfig), async (req, res) => {
   try {
-    const body = await getRawBody(req, { length: req.headers['content-length'], limit: '10mb' });
-    req.body = JSON.parse(body.toString());
+    const events = req.body.events;
+    await Promise.all(events.map(handleEvent));
+    res.status(200).send('OK');
   } catch (err) {
-    return res.status(400).send('Invalid body');
+    console.error(err);
+    res.status(500).end();
   }
-
-  const events = req.body.events;
-  const results = await Promise.all(events.map(handleEvent));
-  res.json(results);
 });
 
 async function handleEvent(event) {
-  if (event.type !== 'message') return null;
+  if (event.type !== 'message') return;
 
-  if (event.message.type === 'image') {
-    try {
-      const stream = await client.getMessageContent(event.message.id);
-      const uploadResult = await uploader.upload_stream({ resource_type: 'image' }, async (error, result) => {
-        if (error) throw error;
-
-        const imageUrl = result.secure_url;
-        const visionRes = await axios.post(
-          'https://api.openai.com/v1/chat/completions',
-          {
-            model: 'gpt-4-vision-preview',
-            messages: [
-              {
-                role: 'system',
-                content: 'あなたは優しい数学の先生「くまお先生」です。画像にある問題を読み取り、分かりやすく日本語で解説してください。'
-              },
-              {
-                role: 'user',
-                content: [
-                  { type: 'image_url', image_url: { url: imageUrl } }
-                ]
-              }
-            ],
-            max_tokens: 1000
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-
-        const replyText = visionRes.data.choices[0].message.content;
-        await client.replyMessage(event.replyToken, { type: 'text', text: replyText });
-      });
-
-      stream.pipe(uploadResult);
-      return;
-    } catch (err) {
-      console.error(err);
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: '画像の処理中にエラーが発生しました。'
-      });
-    }
-  }
-
+  // テキストはそのままエコー
   if (event.message.type === 'text') {
-    const reply = `くまお先生です。「${event.message.text}」について考えますね！`;
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: reply
+      text: `You said: ${event.message.text}`,
     });
   }
 
-  return null;
+  // 画像メッセージの場合
+  if (event.message.type === 'image') {
+    // LINE からバイナリを取得
+    const stream = await client.getMessageContent(event.message.id);
+    const buffer = await streamToBuffer(stream);
+
+    // Cloudinary にアップロード
+    const result = await new Promise((resolve, reject) => {
+      const up = cloudinary.uploader.upload_stream(
+        { resource_type: 'image' },
+        (err, out) => (err ? reject(err) : resolve(out))
+      );
+      up.end(buffer);
+    });
+
+    // OpenAI（GPT-4o-mini）へ画像 URL を投げる
+    const imageUrl = result.secure_url;
+    const completion = await openai.createChatCompletion({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are an image analysis assistant.' },
+        { role: 'user', content: `Analyze this image: ${imageUrl}` },
+      ],
+    });
+    const replyText = completion.data.choices[0].message.content;
+
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: replyText,
+    });
+  }
 }
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server is running on port ${port}`));
+// Stream → Buffer 変換ヘルパー
+function streamToBuffer(stream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    stream.on('data', (c) => chunks.push(c));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
+  });
+}
+
+app.listen(PORT, () => console.log(`Listening on ${PORT}`));
