@@ -1,19 +1,32 @@
 require('dotenv').config();
 const express = require('express');
 const { Client, middleware } = require('@line/bot-sdk');
-const axios = require('axios');
+const { v2: Cloudinary } = require('cloudinary');
+const { Configuration, OpenAIApi } = require('openai');
 
 const app = express();
 const port = process.env.PORT || 8080;
 
-const config = {
+// LINE SDK 設定
+const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
+const client = new Client(lineConfig);
 
-const client = new Client(config);
+// Cloudinary 設定
+Cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
-app.post('/webhook', middleware(config), async (req, res) => {
+// OpenAI 設定
+const openai = new OpenAIApi(new Configuration({
+  apiKey: process.env.OPENAI_API_KEY,
+}));
+
+app.post('/webhook', middleware(lineConfig), async (req, res) => {
   try {
     const events = req.body.events;
     await Promise.all(events.map(handleEvent));
@@ -26,43 +39,48 @@ app.post('/webhook', middleware(config), async (req, res) => {
 
 async function handleEvent(event) {
   if (event.type !== 'message') return;
-
   const { type, text, id } = event.message;
+
   if (type === 'text') {
-    // テキストは優しく面白く返す
+    // OpenAI に投げて「自然な対話+解説」を生成
+    const reply = await openai.createChatCompletion({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: 'あなたは「くまお先生」という優しくて面白い先生です。何でもわかりやすく答えてください。' },
+        { role: 'user', content: text }
+      ],
+    });
+    const answer = reply.data.choices[0].message.content.trim();
+
     await client.replyMessage(event.replyToken, {
       type: 'text',
-      text: `くまお先生だよ🐻\n「${text}」っていう質問だね！\nゆっくり解説するよ～😊`,
+      text: answer,
     });
   }
   else if (type === 'image') {
-    // 画像は OpenAI Vision API などで解析 → 要約＆解説
+    // 画像取得→Cloudinaryアップロード
     const stream = await client.getMessageContent(id);
     const chunks = [];
     for await (const chunk of stream) chunks.push(chunk);
     const buffer = Buffer.concat(chunks);
 
-    // ここで Cloudinary へアップする or OpenAI へ渡す例
-    const uploadRes = await axios.post(
-      `https://api.cloudinary.com/v1_1/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload`,
-      {
-        file: `data:image/jpeg;base64,${buffer.toString('base64')}`,
-        upload_preset: process.env.CLOUDINARY_UPLOAD_PRESET,
-      }
-    );
+    const upload = await Cloudinary.uploader.upload_stream({ resource_type: 'image' }, () => {});
+    upload.end(buffer);
+    const imageUrl = upload.url;
 
-    // URL を OpenAI Vision に渡し、自然言語説明を取得
-    const openaiRes = await axios.post(
-      'https://api.openai.com/v1/images/analyze', // 仮のエンドポイント
-      { url: uploadRes.data.secure_url },
-      { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } }
-    );
-
-    const description = openaiRes.data.description || 'ごめんね、解説に失敗しちゃった…';
+    // OpenAI Vision（仮）へ送って解説を取得
+    const vision = await openai.createChatCompletion({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: 'これはユーザーが送った画像の説明をしてください。' },
+        { role: 'user', content: imageUrl }
+      ],
+    });
+    const caption = vision.data.choices[0].message.content.trim();
 
     await client.replyMessage(event.replyToken, {
       type: 'text',
-      text: `くまお先生の画像解析結果🐻📷\n${description}`,
+      text: `くまお先生の画像解析🐻📷\n${caption}`,
     });
   }
 }
