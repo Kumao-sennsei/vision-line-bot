@@ -1,79 +1,60 @@
-// index.js（くまお先生がやさしく自然に会話）
-require("dotenv").config();
-const express = require("express");
-const { Client, middleware } = require("@line/bot-sdk");
-const axios = require("axios");
+// index.js
+require('dotenv').config();
+const express = require('express');
+const line = require('@line/bot-sdk');
+const { Configuration, OpenAIApi } = require('openai');
 
 const app = express();
+const port = process.env.PORT || 3000;
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
 
-const client = new Client(config);
+const client = new line.Client(config);
 
-app.post("/webhook", middleware(config), async (req, res) => {
-  const events = req.body.events;
-  const results = await Promise.all(
-    events.map(async (event) => {
-      if (event.type === "message" && event.message.type === "text") {
-        return handleTextMessage(event);
-      } else {
-        return Promise.resolve(null);
-      }
-    })
-  );
-  res.status(200).json(results);
+const openai = new OpenAIApi(new Configuration({
+  apiKey: process.env.OPENAI_API_KEY,
+}));
+
+app.post('/webhook', line.middleware(config), async (req, res) => {
+  try {
+    const events = req.body.events;
+    const results = await Promise.all(events.map(handleEvent));
+    res.json(results);
+  } catch (err) {
+    console.error('エラー発生:', err);
+    res.status(500).end();
+  }
 });
 
-async function handleTextMessage(event) {
+async function handleEvent(event) {
+  if (event.type !== 'message' || event.message.type !== 'text') {
+    return Promise.resolve(null);
+  }
+
   const userMessage = event.message.text;
 
-  // OpenAIへ送信するメッセージ構成（くまお先生フィルター）
-  const messages = [
-    {
-      role: "system",
-      content:
-        "あなたはくまお先生という優しくて面白い先生です。質問されたことを自然な会話のように、わかりやすく、親しみやすく解説してください。形式張った説明ではなく、たとえば「おっ、これはいい質問だね！」や「じゃあ、わかりやすく話してみるね」などを交えてください。",
-    },
-    {
-      role: "user",
-      content: userMessage,
-    },
-  ];
+  const prompt = `生徒からの質問です：「${userMessage}」\nこの質問に対して、優しくて面白いくまお先生として、自然な会話で答えてください。要約＋解説も含めて、わかりやすくお願いします。`;
 
   try {
-    const response = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: "gpt-3.5-turbo",
-        messages,
-        temperature: 0.7,
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-      }
-    );
-
-    const answer = response.data.choices[0].message.content.trim();
-
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: answer,
+    const completion = await openai.createChatCompletion({
+      model: 'gpt-3.5-turbo',
+      messages: [{ role: 'user', content: prompt }],
     });
-  } catch (error) {
-    console.error("OpenAI API Error:", error.message);
+
+    const replyText = completion.data.choices[0].message.content;
+    return client.replyMessage(event.replyToken, { type: 'text', text: replyText });
+  } catch (err) {
+    console.error('OpenAIエラー:', err);
     return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: "ごめんね、くまお先生ちょっと疲れちゃったみたい…もう一度試してくれるかな？",
+      type: 'text',
+      text: 'ごめんね、くまお先生ちょっと混乱中かも…また聞いてね！',
     });
   }
 }
 
-app.listen(3000, () => {
-  console.log("Bot is running on port 3000");
+app.listen(port, () => {
+  console.log(`サーバー起動中ポート: ${port}`);
 });
