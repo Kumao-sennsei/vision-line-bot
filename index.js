@@ -2,7 +2,7 @@
 const express = require('express');
 const line = require('@line/bot-sdk');
 const cloudinary = require('cloudinary').v2;
-const { Configuration, OpenAIApi } = require('openai');
+const axios = require('axios');
 const app = express();
 
 // Railway対応：環境変数PORTまたは8080
@@ -21,11 +21,6 @@ cloudinary.config({
   api_key:    process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
-
-// OpenAI設定
-const openai = new OpenAIApi(
-  new Configuration({ apiKey: process.env.OPENAI_API_KEY })
-);
 
 // JSONパース
 app.use(express.json());
@@ -47,7 +42,7 @@ async function handleEvent(event) {
 
   // —— 画像イベント ——
   if (event.type === 'message' && event.message.type === 'image') {
-    // 1) 処理中通知
+    // 1) 処理中を通知
     await client.replyMessage(event.replyToken, {
       type: 'text',
       text: '画像の処理中です…少々お待ちください。',
@@ -59,25 +54,33 @@ async function handleEvent(event) {
     for await (let chunk of stream) chunks.push(chunk);
     const buffer = Buffer.concat(chunks);
 
-    // 3) Cloudinary にアップロード＆OCR（OpenAI にURLを渡す）
+    // 3) Cloudinary にアップ
     const uploadResult = await new Promise((resolve, reject) => {
       const uploader = cloudinary.uploader.upload_stream(
         { resource_type: 'image' },
-        (error, result) => error ? reject(error) : resolve(result)
+        (err, result) => err ? reject(err) : resolve(result)
       );
       uploader.end(buffer);
     });
     const imageUrl = uploadResult.secure_url;
 
-    // 4) OpenAI に画像URLを投げて解析
-    const chat = await openai.createChatCompletion({
-      model: 'gpt-4o-mini', // Vision対応モデルを指定
-      messages: [
-        { role: 'system', content: 'この画像を説明してください。' },
-        { role: 'user', content: imageUrl }
-      ]
-    });
-    const description = chat.data.choices[0].message.content.trim();
+    // 4) OpenAI Chat API に画像 URL で問い合わせ
+    const chatRes = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'この画像を説明してください。' },
+          { role: 'user', content: imageUrl }
+        ]
+      },
+      { headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+        }
+      }
+    );
+    const description = chatRes.data.choices[0].message.content.trim();
 
     // 5) 解析結果を pushMessage で返信
     return client.pushMessage(event.source.userId, {
