@@ -1,124 +1,102 @@
-// ==========================
-// 📦 vision-line-bot index.js
-// Turbo + Cloudinary + Vision API対応
-// ==========================
-
 import express from 'express';
-import line from '@line/bot-sdk';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import FormData from 'form-data';
-import { v2 as cloudinary } from 'cloudinary';
-import { OpenAI } from 'openai';
+import line from '@line/bot-sdk';
+import { config as cloudinaryConfig, uploader } from 'cloudinary';
+import getRawBody from 'raw-body';
 
 dotenv.config();
 
-// LINE設定
-const config = {
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
-};
-const client = new line.Client(config);
-const app = express();
-
-// Cloudinary設定
-cloudinary.config({
+cloudinaryConfig({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// OpenAI設定
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const app = express();
+app.use('/webhook', line.middleware({
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET
+}));
 
-app.post('/webhook', line.middleware(config), async (req, res) => {
+const client = new line.Client({
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
+});
+
+app.post('/webhook', async (req, res) => {
+  try {
+    const body = await getRawBody(req, { length: req.headers['content-length'], limit: '10mb' });
+    req.body = JSON.parse(body.toString());
+  } catch (err) {
+    return res.status(400).send('Invalid body');
+  }
+
   const events = req.body.events;
-  for (const event of events) {
-    if (event.type !== 'message') continue;
+  const results = await Promise.all(events.map(handleEvent));
+  res.json(results);
+});
 
-    // ① 画像メッセージ処理
-    if (event.message.type === 'image') {
-      try {
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: '画像の処理中です・・・'
-        });
+async function handleEvent(event) {
+  if (event.type !== 'message') return null;
 
-        const stream = await client.getMessageContent(event.message.id);
-        const chunks = [];
-        for await (const chunk of stream) chunks.push(chunk);
-        const buffer = Buffer.concat(chunks);
+  if (event.message.type === 'image') {
+    try {
+      const stream = await client.getMessageContent(event.message.id);
+      const uploadResult = await uploader.upload_stream({ resource_type: 'image' }, async (error, result) => {
+        if (error) throw error;
 
-        const uploadRes = await cloudinary.uploader.upload_stream({ resource_type: 'image' }, async (error, result) => {
-          if (error) throw error;
-
-          const imageUrl = result.secure_url;
-
-          // ② Vision APIで画像解析
-          const visionRes = await openai.chat.completions.create({
+        const imageUrl = result.secure_url;
+        const visionRes = await axios.post(
+          'https://api.openai.com/v1/chat/completions',
+          {
             model: 'gpt-4-vision-preview',
             messages: [
               {
                 role: 'system',
-                content: 'あなたは優しくて面白い数学の先生「くまお先生」です。画像の質問に丁寧に答えてください。'
+                content: 'あなたは優しい数学の先生「くまお先生」です。画像にある問題を読み取り、分かりやすく日本語で解説してください。'
               },
               {
                 role: 'user',
                 content: [
-                  {
-                    type: 'image_url',
-                    image_url: { url: imageUrl }
-                  },
-                  {
-                    type: 'text',
-                    text: 'この画像の内容を分かりやすく説明してください'
-                  }
+                  { type: 'image_url', image_url: { url: imageUrl } }
                 ]
               }
             ],
             max_tokens: 1000
-          });
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
 
-          const reply = visionRes.choices[0].message.content || 'うーん、ちょっと分からないかも…';
-          await client.pushMessage(event.source.userId, { type: 'text', text: reply });
-        });
+        const replyText = visionRes.data.choices[0].message.content;
+        await client.replyMessage(event.replyToken, { type: 'text', text: replyText });
+      });
 
-        const passthrough = uploadRes;
-      } catch (e) {
-        console.error(e);
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: '画像処理中にエラーが発生しました。もう一度お試しください。'
-        });
-      }
-    }
-
-    // ② テキストメッセージ処理
-    else if (event.message.type === 'text') {
-      try {
-        const text = event.message.text;
-        const response = await openai.chat.completions.create({
-          model: 'gpt-4-turbo',
-          messages: [
-            { role: 'system', content: 'あなたは優しくて面白い先生「くまお先生」です。質問に分かりやすく答えてください。' },
-            { role: 'user', content: text }
-          ],
-          max_tokens: 1000
-        });
-
-        const reply = response.choices[0].message.content;
-        await client.replyMessage(event.replyToken, { type: 'text', text: reply });
-      } catch (err) {
-        console.error(err);
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: 'エラーが発生しました。少し時間をおいて再度お試しください。'
-        });
-      }
+      stream.pipe(uploadResult);
+      return;
+    } catch (err) {
+      console.error(err);
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '画像の処理中にエラーが発生しました。'
+      });
     }
   }
-  res.status(200).send('OK');
-});
+
+  if (event.message.type === 'text') {
+    const reply = `くまお先生です。「${event.message.text}」について考えますね！`;
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: reply
+    });
+  }
+
+  return null;
+}
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`🚀 Server running on port ${port}`));
+app.listen(port, () => console.log(`Server is running on port ${port}`));
